@@ -1,5 +1,6 @@
 """PDF loading, rendering, and text extraction."""
 
+import hashlib
 from pathlib import Path
 
 import fitz
@@ -41,6 +42,25 @@ class PdfService:
         """Return text inside a PDF-coordinate rectangle."""
         page = self._get_page(page_index)
         return page.get_text("text", clip=rectangle).strip()
+
+    def page_text(self, page_index: int) -> str:
+        """Return all text from one PDF page."""
+        return self._get_page(page_index).get_text("text")
+
+    def page_size(self, page_index: int) -> tuple[float, float]:
+        """Return one PDF page size in points."""
+        rectangle = self._get_page(page_index).rect
+        return rectangle.width, rectangle.height
+
+    def document_hash(self) -> str:
+        """Return the SHA-256 hash of the opened source PDF."""
+        if self.path is None:
+            raise RuntimeError("No PDF is open.")
+        digest = hashlib.sha256()
+        with self.path.open("rb") as file:
+            for chunk in iter(lambda: file.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     def _get_page(self, page_index: int) -> fitz.Page:
         if self._document is None:

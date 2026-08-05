@@ -1,4 +1,4 @@
-"""PDF preview with page, zoom, and multi-selection controls."""
+"""PDF preview with persistent, named template field selections."""
 
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -9,29 +9,41 @@ import fitz
 from PIL import ImageTk
 
 from invoice_reader.services.pdf_service import PdfService
+from invoice_reader.templates.template_models import (
+    FIELD_LABELS,
+    FIELD_NAMES,
+    TemplateField,
+    create_template_field,
+)
 
 
 @dataclass
-class Selection:
-    """Canvas items and extracted text for one selected PDF area."""
+class FieldOverlay:
+    """Canvas items representing a selected field on the visible page."""
 
+    field_name: str
     rectangle_id: int
     label_id: int
-    text: str = ""
 
 
 class PdfViewer(ttk.Frame):
-    """Display one PDF and report the text for every mouse selection."""
+    """Display a PDF and retain four normalized field locations across pages."""
 
     _MARGIN = 16
     _MIN_ZOOM = 0.5
     _MAX_ZOOM = 3.0
     _ZOOM_STEP = 0.25
 
-    def __init__(self, master: tk.Misc, on_selections_changed: Callable[[list[str]], None]) -> None:
+    def __init__(
+        self,
+        master: tk.Misc,
+        on_fields_changed: Callable[[dict[str, str]], None],
+        on_pdf_opened: Callable[[PdfService], None],
+    ) -> None:
         super().__init__(master)
         self._service = PdfService()
-        self._on_selections_changed = on_selections_changed
+        self._on_fields_changed = on_fields_changed
+        self._on_pdf_opened = on_pdf_opened
         self._page_index = 0
         self._zoom = 1.0
         self._page_x = self._MARGIN
@@ -39,14 +51,41 @@ class PdfViewer(ttk.Frame):
         self._page_width = 0
         self._page_height = 0
         self._image: ImageTk.PhotoImage | None = None
-        self._selections: list[Selection] = []
-        self._drawing_selection: Selection | None = None
-        self._selected_selection: Selection | None = None
+        self._active_field = FIELD_NAMES[0]
+        self._selected_field: str | None = None
+        self._drawing_overlay: FieldOverlay | None = None
+        self._overlays: dict[str, FieldOverlay] = {}
+        self._field_locations: dict[str, TemplateField] = {}
+        self._field_texts: dict[str, str] = {}
         self._selection_after_id: str | None = None
-        self._pending_text_selection: Selection | None = None
 
         self._build_toolbar()
         self._build_canvas()
+
+    def set_active_field(self, field_name: str) -> None:
+        """Choose which of the four fields the next drag will replace."""
+        self._active_field = field_name
+
+    def field_locations(self) -> dict[str, TemplateField]:
+        """Return the current four field locations for template compilation."""
+        return dict(self._field_locations)
+
+    def first_page_size(self) -> tuple[float, float]:
+        """Return the first page size needed for a newly saved template."""
+        return self._service.page_size(0)
+
+    def document_hash(self) -> str:
+        """Return the hash of the PDF used as the template sample."""
+        return self._service.document_hash()
+
+    def apply_template_fields(self, fields: dict[str, TemplateField]) -> None:
+        """Display all field locations from an applied template."""
+        self._field_locations = dict(fields)
+        self._field_texts = {field_name: "" for field_name in fields}
+        self._selected_field = None
+        if self._service.page_count:
+            self._render_page()
+        self._notify_fields_changed()
 
     def _build_toolbar(self) -> None:
         toolbar = ttk.Frame(self)
@@ -85,7 +124,7 @@ class PdfViewer(ttk.Frame):
         self._canvas.bind("<ButtonRelease-1>", self._finish_selection)
         self._canvas.bind("<MouseWheel>", self._mouse_wheel)
         self._canvas.bind("<Shift-MouseWheel>", self._shift_mouse_wheel)
-        self._canvas.bind("<Delete>", self._delete_selected_selection)
+        self._canvas.bind("<Delete>", self._delete_selected_field)
 
     def _open_pdf(self) -> None:
         path = filedialog.askopenfilename(
@@ -103,7 +142,12 @@ class PdfViewer(ttk.Frame):
 
         self._page_index = 0
         self._zoom = 1.0
+        self._field_locations.clear()
+        self._field_texts.clear()
+        self._selected_field = None
         self._render_page()
+        self._notify_fields_changed()
+        self._on_pdf_opened(self._service)
 
     def _change_page(self, direction: int, show_bottom: bool = False) -> None:
         new_index = self._page_index + direction
@@ -128,6 +172,7 @@ class PdfViewer(ttk.Frame):
         self._render_page()
 
     def _render_page(self) -> None:
+        self._cancel_scheduled_text_update()
         image = self._service.render_page(self._page_index, self._zoom)
         self._image = ImageTk.PhotoImage(image)
         self._canvas.delete("all")
@@ -144,103 +189,132 @@ class PdfViewer(ttk.Frame):
         )
         self._canvas.xview_moveto(0)
         self._canvas.yview_moveto(0)
-        self._selections.clear()
-        self._drawing_selection = None
-        self._selected_selection = None
-        self._pending_text_selection = None
-        if self._selection_after_id is not None:
-            self.after_cancel(self._selection_after_id)
-            self._selection_after_id = None
-        self._notify_selections_changed()
+        self._drawing_overlay = None
+        self._overlays.clear()
+        self._draw_current_page_fields()
         self._status.set(
             f"第 {self._page_index + 1} / {self._service.page_count} 页 | 缩放 {self._zoom:.0%}"
         )
+
+    def _draw_current_page_fields(self) -> None:
+        for field_name in FIELD_NAMES:
+            field = self._field_locations.get(field_name)
+            if field is None or field.page_number != self._page_index + 1:
+                continue
+            x0, y0, x1, y1 = field.bbox_normalized
+            self._create_overlay(
+                field_name,
+                self._page_x + x0 * self._page_width,
+                self._page_y + y0 * self._page_height,
+                self._page_x + x1 * self._page_width,
+                self._page_y + y1 * self._page_height,
+            )
+
+    def _create_overlay(
+        self,
+        field_name: str,
+        x0: float,
+        y0: float,
+        x1: float,
+        y1: float,
+    ) -> FieldOverlay:
+        overlay = FieldOverlay(
+            field_name=field_name,
+            rectangle_id=self._canvas.create_rectangle(x0, y0, x1, y1, outline="#0078d4", width=2),
+            label_id=self._canvas.create_text(
+                min(x0, x1) + 4,
+                min(y0, y1) + 4,
+                anchor="nw",
+                fill="#0078d4",
+                font=("Segoe UI", 10, "bold"),
+                text=FIELD_LABELS[field_name],
+            ),
+        )
+        self._overlays[field_name] = overlay
+        self._set_overlay_outline(overlay)
+        return overlay
 
     def _start_selection(self, event: tk.Event) -> None:
         if self._service.page_count == 0:
             return
         self._canvas.focus_set()
         point = self._canvas_point(event)
-        existing_selection = self._selection_at(point)
-        if existing_selection is not None:
-            self._drawing_selection = None
-            self._set_selected_selection(existing_selection)
+        selected_field = self._field_at(point)
+        if selected_field is not None:
+            self._drawing_overlay = None
+            self._selected_field = selected_field
+            self._refresh_overlay_outlines()
             return
 
-        rectangle_id = self._canvas.create_rectangle(
-            *point,
-            *point,
-            outline="#0078d4",
-            width=2,
-        )
-        label_id = self._canvas.create_text(
-            point[0] + 4,
-            point[1] + 4,
-            anchor="nw",
-            fill="#0078d4",
-            font=("Segoe UI", 10, "bold"),
-            text=str(len(self._selections) + 1),
-        )
-        selection = Selection(rectangle_id=rectangle_id, label_id=label_id)
-        self._selections.append(selection)
-        self._drawing_selection = selection
-        self._set_selected_selection(selection)
-        self._notify_selections_changed()
+        self._remove_field(self._active_field)
+        self._selected_field = self._active_field
+        self._drawing_overlay = self._create_overlay(self._active_field, *point, *point)
+        self._field_texts[self._active_field] = ""
+        self._notify_fields_changed()
 
     def _update_selection(self, event: tk.Event) -> None:
-        selection = self._drawing_selection
-        if selection is None:
+        overlay = self._drawing_overlay
+        if overlay is None:
             return
-        start_x, start_y, _, _ = self._canvas.coords(selection.rectangle_id)
+        start_x, start_y, _, _ = self._canvas.coords(overlay.rectangle_id)
         end_x, end_y = self._canvas_point(event)
-        self._canvas.coords(selection.rectangle_id, start_x, start_y, end_x, end_y)
-        self._canvas.coords(
-            selection.label_id,
-            min(start_x, end_x) + 4,
-            min(start_y, end_y) + 4,
-        )
-        self._schedule_selection_text_update(selection)
+        self._canvas.coords(overlay.rectangle_id, start_x, start_y, end_x, end_y)
+        self._canvas.coords(overlay.label_id, min(start_x, end_x) + 4, min(start_y, end_y) + 4)
+        self._schedule_selection_text_update()
 
     def _finish_selection(self, event: tk.Event) -> None:
-        selection = self._drawing_selection
-        if selection is None:
+        overlay = self._drawing_overlay
+        if overlay is None:
             return
         self._update_selection(event)
-        self._drawing_selection = None
-        if self._selection_rectangle(selection) is None:
-            self._remove_selection(selection)
-            self._notify_selections_changed()
+        self._drawing_overlay = None
+        bbox_normalized = self._normalized_bbox(overlay)
+        if bbox_normalized is None:
+            self._remove_field(overlay.field_name)
+            self._notify_fields_changed()
             return
         self._cancel_scheduled_text_update()
-        self._update_selection_text(selection)
+        self._field_locations[overlay.field_name] = create_template_field(
+            overlay.field_name,
+            self._page_index + 1,
+            bbox_normalized,
+        )
+        self._update_field_text(overlay)
 
-    def _schedule_selection_text_update(self, selection: Selection) -> None:
-        self._pending_text_selection = selection
+    def _schedule_selection_text_update(self) -> None:
         if self._selection_after_id is None:
-            self._selection_after_id = self.after(100, self._update_pending_selection_text)
+            self._selection_after_id = self.after(100, self._update_drawing_field_text)
 
-    def _update_pending_selection_text(self) -> None:
+    def _update_drawing_field_text(self) -> None:
         self._selection_after_id = None
-        selection = self._pending_text_selection
-        self._pending_text_selection = None
-        if selection is not None:
-            self._update_selection_text(selection)
+        if self._drawing_overlay is not None:
+            self._update_field_text(self._drawing_overlay)
 
     def _cancel_scheduled_text_update(self) -> None:
         if self._selection_after_id is not None:
             self.after_cancel(self._selection_after_id)
             self._selection_after_id = None
-        self._pending_text_selection = None
 
-    def _update_selection_text(self, selection: Selection) -> None:
-        rectangle = self._selection_rectangle(selection)
-        if rectangle is None or selection not in self._selections:
+    def _update_field_text(self, overlay: FieldOverlay) -> None:
+        rectangle = self._pdf_rectangle(overlay)
+        if rectangle is None:
             return
-        selection.text = self._service.extract_text(self._page_index, rectangle)
-        self._notify_selections_changed()
+        self._field_texts[overlay.field_name] = self._service.extract_text(self._page_index, rectangle)
+        self._notify_fields_changed()
 
-    def _selection_rectangle(self, selection: Selection) -> fitz.Rect | None:
-        x0, y0, x1, y1 = self._canvas.coords(selection.rectangle_id)
+    def _normalized_bbox(self, overlay: FieldOverlay) -> tuple[float, float, float, float] | None:
+        rectangle = self._pdf_rectangle(overlay)
+        if rectangle is None:
+            return None
+        return (
+            rectangle.x0 / self._service.page_size(self._page_index)[0],
+            rectangle.y0 / self._service.page_size(self._page_index)[1],
+            rectangle.x1 / self._service.page_size(self._page_index)[0],
+            rectangle.y1 / self._service.page_size(self._page_index)[1],
+        )
+
+    def _pdf_rectangle(self, overlay: FieldOverlay) -> fitz.Rect | None:
+        x0, y0, x1, y1 = self._canvas.coords(overlay.rectangle_id)
         left = max(self._page_x, min(x0, x1))
         top = max(self._page_y, min(y0, y1))
         right = min(self._page_x + self._page_width, max(x0, x1))
@@ -254,37 +328,43 @@ class PdfViewer(ttk.Frame):
             (bottom - self._page_y) / self._zoom,
         )
 
-    def _selection_at(self, point: tuple[float, float]) -> Selection | None:
+    def _field_at(self, point: tuple[float, float]) -> str | None:
         point_x, point_y = point
-        for selection in reversed(self._selections):
-            x0, y0, x1, y1 = self._canvas.coords(selection.rectangle_id)
+        for field_name in reversed(FIELD_NAMES):
+            overlay = self._overlays.get(field_name)
+            if overlay is None:
+                continue
+            x0, y0, x1, y1 = self._canvas.coords(overlay.rectangle_id)
             if min(x0, x1) <= point_x <= max(x0, x1) and min(y0, y1) <= point_y <= max(y0, y1):
-                return selection
+                return field_name
         return None
 
-    def _set_selected_selection(self, selection: Selection) -> None:
-        self._selected_selection = selection
-        for current_selection in self._selections:
-            outline = "#d83b01" if current_selection is selection else "#0078d4"
-            self._canvas.itemconfigure(current_selection.rectangle_id, outline=outline)
-
-    def _delete_selected_selection(self, _event: tk.Event) -> str:
-        if self._selected_selection is None:
-            return "break"
-        self._remove_selection(self._selected_selection)
-        self._notify_selections_changed()
+    def _delete_selected_field(self, _event: tk.Event) -> str:
+        if self._selected_field is not None:
+            self._remove_field(self._selected_field)
+            self._notify_fields_changed()
         return "break"
 
-    def _remove_selection(self, selection: Selection) -> None:
-        self._canvas.delete(selection.rectangle_id)
-        self._canvas.delete(selection.label_id)
-        self._selections.remove(selection)
-        self._selected_selection = None
-        for index, current_selection in enumerate(self._selections, start=1):
-            self._canvas.itemconfigure(current_selection.label_id, text=str(index))
+    def _remove_field(self, field_name: str) -> None:
+        overlay = self._overlays.pop(field_name, None)
+        if overlay is not None:
+            self._canvas.delete(overlay.rectangle_id)
+            self._canvas.delete(overlay.label_id)
+        self._field_locations.pop(field_name, None)
+        self._field_texts.pop(field_name, None)
+        if self._selected_field == field_name:
+            self._selected_field = None
 
-    def _notify_selections_changed(self) -> None:
-        self._on_selections_changed([selection.text for selection in self._selections])
+    def _refresh_overlay_outlines(self) -> None:
+        for overlay in self._overlays.values():
+            self._set_overlay_outline(overlay)
+
+    def _set_overlay_outline(self, overlay: FieldOverlay) -> None:
+        outline = "#d83b01" if overlay.field_name == self._selected_field else "#0078d4"
+        self._canvas.itemconfigure(overlay.rectangle_id, outline=outline)
+
+    def _notify_fields_changed(self) -> None:
+        self._on_fields_changed(dict(self._field_texts))
 
     def _canvas_point(self, event: tk.Event) -> tuple[float, float]:
         return self._canvas.canvasx(event.x), self._canvas.canvasy(event.y)
