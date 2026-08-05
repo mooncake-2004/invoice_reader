@@ -15,7 +15,7 @@ class MainWindow(ttk.Frame):
         content = ttk.PanedWindow(self, orient="horizontal")
         content.pack(fill="both", expand=True)
 
-        self._viewer = PdfViewer(content, on_selection_text=self._show_selection_text)
+        self._viewer = PdfViewer(content, on_selections_changed=self._show_selection_texts)
         content.add(self._viewer, weight=4)
 
         side_panel = ttk.Frame(content, padding=(10, 0, 0, 0))
@@ -26,17 +26,17 @@ class MainWindow(ttk.Frame):
         )
         ttk.Label(
             side_panel,
-            text="在 PDF 页面上按住鼠标左键拖拽，文字会在这里显示。",
+            text="在 PDF 页面上拖拽框选。点击框可选中，按 Delete 删除；鼠标滚轮翻页。",
             wraplength=260,
         ).pack(anchor="w", pady=(4, 8))
 
         self._text = tk.Text(side_panel, wrap="word", height=20, state="disabled")
         self._text.pack(fill="both", expand=True)
 
-    def _show_selection_text(self, text: str) -> None:
-        """Refresh the panel with text from the current rectangle."""
+    def _show_selection_texts(self, texts: list[str]) -> None:
+        """Refresh the panel with text from every current rectangle."""
         self._text.configure(state="normal")
         self._text.delete("1.0", "end")
-        self._text.insert("1.0", text)
+        self._text.insert("1.0", "\n".join(f"框{index}: {text}" for index, text in enumerate(texts, start=1)))
         self._text.configure(state="disabled")
 
