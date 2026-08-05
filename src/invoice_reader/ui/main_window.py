@@ -26,7 +26,7 @@ class MainWindow(ttk.Frame):
         )
         ttk.Label(
             side_panel,
-            text="在 PDF 页面上拖拽框选。点击框可选中，按 Delete 删除；鼠标滚轮翻页。",
+            text="在 PDF 页面上拖拽框选。点击框可选中，按 Delete 删除；鼠标滚轮连续浏览。",
             wraplength=260,
         ).pack(anchor="w", pady=(4, 8))
 

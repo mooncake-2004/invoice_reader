@@ -105,11 +105,13 @@ class PdfViewer(ttk.Frame):
         self._zoom = 1.0
         self._render_page()
 
-    def _change_page(self, direction: int) -> None:
+    def _change_page(self, direction: int, show_bottom: bool = False) -> None:
         new_index = self._page_index + direction
         if 0 <= new_index < self._service.page_count:
             self._page_index = new_index
             self._render_page()
+            if show_bottom:
+                self._canvas.yview_moveto(1)
 
     def _change_zoom(self, amount: float) -> None:
         if self._service.page_count == 0:
@@ -288,10 +290,17 @@ class PdfViewer(ttk.Frame):
         return self._canvas.canvasx(event.x), self._canvas.canvasy(event.y)
 
     def _mouse_wheel(self, event: tk.Event) -> None:
-        if event.delta < 0:
-            self._change_page(1)
-        elif event.delta > 0:
-            self._change_page(-1)
+        units = -int(event.delta / 120)
+        if units > 0:
+            if self._canvas.yview()[1] >= 1.0:
+                self._change_page(1)
+            else:
+                self._canvas.yview_scroll(units, "units")
+        elif units < 0:
+            if self._canvas.yview()[0] <= 0.0:
+                self._change_page(-1, show_bottom=True)
+            else:
+                self._canvas.yview_scroll(units, "units")
 
     def _shift_mouse_wheel(self, event: tk.Event) -> None:
         self._canvas.xview_scroll(-int(event.delta / 120), "units")
