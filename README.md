@@ -2,13 +2,15 @@
 
 离线 Windows PDF 发票处理工具。
 
-当前版本为阶段 1，只提供：
+当前版本为阶段 2，提供：
 
 - 打开单张 PDF；
 - 鼠标滚轮连续浏览、缩放和滚动条移动；
 - 鼠标拖拽多个框选并显示序号；
 - 右侧按序号实时显示每个框选区域中的 PDF 文字层文本；
 - 点击框选后按 Delete 删除。
+- 可配置并保存 PLMN 文件名片段模式；
+- 在窗口内测试文件名或真实 PDF 的 PLMN 解析。
 
 ## 运行源码
 
@@ -17,7 +19,14 @@ python -m pip install -r requirements.txt
 python -m invoice_reader
 ```
 
-## 阶段 1 EXE 验证
+## 运行单元测试
+
+```powershell
+python -m pip install -e ".[test]"
+pytest
+```
+
+## 阶段 2 EXE 验证
 
 打开 `InvoiceReaderPhase1.exe` 后：
 
@@ -27,5 +36,7 @@ python -m invoice_reader
 4. 在页面上按住鼠标左键拖拽多个文字区域，确认每个框显示序号。
 5. 查看右侧“框选文字”区域是否按序号显示每个框的文字。
 6. 点击一个框后按 Delete，确认该框和对应右侧文字都被删除并重新编号。
+7. 在顶部“PLMN 文件名测试”中输入一条或多条模式（每行一条，例如 `<PLMN>_MACHT`），输入文件名或选择真实 PDF，点击“解析并保存模式”。
+8. 确认显示提取出的 PLMN；没有命中时显示“需手动填写”。重启程序后确认模式仍保留。
 
 阶段 1 仅支持有文字层的 PDF；OCR、模板、Excel 和归档会在后续阶段加入。

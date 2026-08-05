@@ -3,6 +3,8 @@
 import tkinter as tk
 from tkinter import ttk
 
+from invoice_reader.repositories.settings_repository import SettingsRepository
+from invoice_reader.ui.filename_parser_panel import FilenameParserPanel
 from invoice_reader.ui.pdf_viewer import PdfViewer
 
 
@@ -11,6 +13,8 @@ class MainWindow(ttk.Frame):
 
     def __init__(self, master: tk.Misc) -> None:
         super().__init__(master, padding=10)
+
+        FilenameParserPanel(self, SettingsRepository()).pack(fill="x", pady=(0, 10))
 
         content = ttk.PanedWindow(self, orient="horizontal")
         content.pack(fill="both", expand=True)
