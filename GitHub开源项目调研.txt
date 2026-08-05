@@ -151,3 +151,479 @@ Windows 本地 PDF 发票批量提取工具——GitHub 开源项目调研
 - 归档：只有审批并成功写入 Excel 后，才将 PDF 移动到“已完成”文件夹。
 - 打包：最终使用适合 Python 桌面应用的 Windows 打包方式生成离线 exe。
 
+
+======================================================================
+第二部分：确定后的技术方案
+======================================================================
+
+方案确定日期：2026-08-05
+
+一、最终技术选型
+================
+
+1. 不 fork invoice2data，不修改它的源码。
+2. 使用 pip 安装 invoice2data[pdfium]，通过独立适配层调用其公开接口。
+3. 使用 Tkinter 构建原生 Windows 桌面 GUI，不使用 Web 界面。
+4. 使用 PyMuPDF 实现 PDF 预览、翻页、缩放、文字层检测和字段框选。
+5. 用户第一次处理新模板时框选四个 PDF 字段的位置，保存为本地模板；以后自动匹配并提取。
+6. PLMN 不从 PDF 内容读取，而是通过两种可配置的文件名正则表达式解析。
+7. 电子 PDF 默认使用 invoice2data + PDFium 提取。
+8. PDF 没有可用文字层，或者个别必填字段在文字模式下为空/格式错误时，自动回退到本地 Tesseract OCR。
+9. 审批成功并确认 Excel 已保存后，才将 PDF 移动到“已完成”文件夹。
+10. OCR 作为可插拔能力；程序可以在没有 OCR 的情况下处理电子 PDF。
+
+不建议直接使用 invoice2data 自带的 Tesseract 后端，因为当前实现还要求安装 ImageMagick 和 pdftotext/Poppler。为了减少 EXE 外部依赖，本项目使用 PyMuPDF 把页面或字段区域渲染成图片，再调用本地 Tesseract。
+
+
+二、整体架构
+============
+
+用户
+  |
+  v
+Tkinter 主窗口
+  |-- PDF 文件队列
+  |-- PyMuPDF PDF Viewer（预览、缩放、翻页、框选）
+  |-- 审批面板（显示、修改、确认字段）
+  |
+  v
+WorkflowController（处理流程和状态机）
+  |-- FilenameParser：根据两种文件名格式解析 PLMN
+  |-- TextProbe：判断 PDF/页面是否具有可用文字层
+  |-- ExtractionRouter：选择文字提取或 OCR
+  |-- TemplateMatcher：匹配公司和版式模板
+  |-- TemplateCompiler：生成 invoice2data 可识别的临时模板
+  |-- Invoice2DataAdapter：调用 invoice2data 公开接口
+  |-- OcrService：PyMuPDF + Tesseract 离线 OCR
+  |-- FieldValidator：字段清洗、类型转换和规则检查
+  |-- ExcelService：创建、切换和追加 .xlsx
+  |-- ArchiveService：成功后移动 PDF
+  |
+  |-- TemplateRepository：保存用户模板
+  |-- SettingsRepository：保存输入目录、Excel 和 OCR 设置
+  `-- StateRepository：SQLite 任务状态、去重和失败恢复
+
+模块职责：
+
+1. Tkinter UI
+   - 选择待处理文件夹、目标 Excel 和已完成文件夹。
+   - 显示 PDF 队列、当前 PDF 和提取结果。
+   - 允许框选、修改、审批、跳过和重试。
+
+2. WorkflowController
+   - 协调所有服务。
+   - 维护每张 PDF 的处理状态。
+   - 确保 Excel 写入失败时不会错误归档。
+
+3. PdfService/PdfViewer
+   - 使用 PyMuPDF 打开和渲染 PDF。
+   - 处理缩放、滚动、翻页和坐标换算。
+   - 将鼠标框选坐标转换为 PDF 页面坐标。
+
+4. TemplateRepository/TemplateMatcher
+   - 保存模板、版本和字段框。
+   - 根据关键词、排除关键词和页面尺寸匹配模板。
+
+5. Invoice2DataAdapter
+   - 项目中唯一直接调用 invoice2data 的模块。
+   - 隔离第三方库升级产生的接口变化。
+
+6. OcrService
+   - 只在文字层不可用或单个必填字段提取失败时运行。
+   - 返回识别文字、置信度和使用的 OCR 参数。
+
+7. ExcelService/ArchiveService
+   - Excel 采用临时文件保存后原子替换，避免文件损坏。
+   - 只有 Excel 成功后才允许归档 PDF。
+
+耗时的提取和 OCR 放到后台线程执行；Tkinter 主线程只更新界面，后台结果通过 after() 返回，避免窗口卡死。
+
+
+三、项目文件和目录结构
+======================
+
+invoice_reader/
+|-- pyproject.toml                  项目、依赖和版本配置
+|-- requirements.txt               必装运行依赖
+|-- requirements-ocr.txt           OCR 可选依赖
+|-- README.md                       使用和开发说明
+|
+|-- src/
+|   `-- invoice_reader/
+|       |-- __main__.py             程序入口
+|       |-- app.py                  初始化主窗口和服务
+|       |
+|       |-- ui/
+|       |   |-- main_window.py      PDF 队列和主界面
+|       |   |-- pdf_viewer.py       PDF 显示、缩放、翻页、框选
+|       |   |-- approval_panel.py   字段结果、修改和审批
+|       |   |-- template_editor.py  新模板创建和字段位置设置
+|       |   `-- settings_dialog.py  目录、Excel、OCR 等设置
+|       |
+|       |-- application/
+|       |   |-- workflow_controller.py  完整处理流程
+|       |   |-- job_state.py            状态枚举和转换规则
+|       |   `-- models.py               InvoiceRecord 等数据对象
+|       |
+|       |-- extraction/
+|       |   |-- extraction_router.py     文字/OCR 路由
+|       |   |-- invoice2data_adapter.py  invoice2data 适配器
+|       |   |-- ocr_service.py           Tesseract OCR
+|       |   |-- text_probe.py            文字层质量检测
+|       |   `-- field_validator.py       字段验证和转换
+|       |
+|       |-- templates/
+|       |   |-- template_repository.py   模板读写和备份
+|       |   |-- template_matcher.py      模板评分和选择
+|       |   `-- template_compiler.py     编译 invoice2data 模板
+|       |
+|       |-- services/
+|       |   |-- filename_parser.py       PLMN 文件名解析
+|       |   |-- pdf_service.py           PDF 打开和渲染
+|       |   |-- excel_service.py         Excel 创建、切换、追加
+|       |   `-- archive_service.py       已完成文件归档
+|       |
+|       |-- repositories/
+|       |   |-- settings_repository.py   设置持久化
+|       |   `-- state_repository.py      SQLite 状态持久化
+|       |
+|       `-- infrastructure/
+|           |-- app_paths.py             Windows 用户数据目录
+|           `-- logging_config.py        日志配置
+|
+|-- config/
+|   `-- defaults.yaml                默认阈值和配置
+|
+|-- assets/
+|   |-- app.ico
+|   `-- toolbar/
+|
+|-- tests/
+|   |-- test_filename_parser.py
+|   |-- test_template_matcher.py
+|   |-- test_template_compiler.py
+|   |-- test_field_validator.py
+|   |-- test_excel_service.py
+|   `-- samples/
+|
+`-- build/
+    |-- invoice_reader.spec          PyInstaller 配置
+    `-- installer/                   安装包配置
+
+EXE 运行后的用户数据目录：
+
+%LOCALAPPDATA%\InvoiceReader\
+|-- settings.json
+|-- invoice_reader.db
+|-- templates\
+|-- template_backups\
+|-- cache\compiled_templates\
+`-- logs\invoice_reader.log
+
+模板和设置不能放在 Program Files 或 exe 旁边，否则安装后可能没有写权限。
+
+
+四、单张 PDF 的完整数据流
+=========================
+
+建议状态：
+
+DISCOVERED
+  -> LOADED
+  -> TEMPLATE_MATCHED / NEEDS_TEMPLATE
+  -> EXTRACTED
+  -> REVIEW_REQUIRED
+  -> APPROVED
+  -> EXCEL_WRITTEN
+  -> ARCHIVED
+
+步骤：
+
+1. 用户选择待处理文件夹，程序扫描其中的 PDF。
+2. 队列只保存路径，不一次性加载上百张 PDF。
+3. 计算 PDF 的 SHA-256，在 SQLite 中检查是否已经处理。
+4. FilenameParser 根据两条正则表达式从文件名提取 PLMN。
+5. PyMuPDF 打开并显示当前 PDF。
+6. TextProbe 检查首页或相关页面的文字层质量。
+7. 文字层正常时，TemplateMatcher 使用文字匹配公司和版式。
+8. TemplateCompiler 将标准化字段框转换成 invoice2data area 参数。
+9. Invoice2DataAdapter 使用 PDFium 提取 Invoice No.、SDR amount、TAP start 和 TAP end。
+10. 如果文字层不可用，先 OCR 首页进行模板匹配，再只 OCR 四个字段区域。
+11. 如果文字层正常但某个必填字段为空或格式错误，只对该字段区域回退 OCR。
+12. 如果没有匹配模板，进入新建模板界面，让用户框选四个字段并确认稳定关键词。
+13. 保存模板后立即重新提取当前 PDF。
+14. 审批界面显示五个字段、来源、校验结果和 OCR 置信度。
+15. 用户可以修改任意值；修改后来源改为“人工修改”，同时保留原始值。
+16. 用户点击“审批并保存”。
+17. 程序检查字段完整性、数字类型、Excel 可写性和重复记录。
+18. ExcelService 向当前工作簿追加一行，先保存到同目录临时文件，再替换正式文件。
+19. Excel 写入成功后，在 SQLite 中记录 PDF 哈希、Excel 路径、工作表、行号和审批时间。
+20. ArchiveService 将 PDF 移动到“已完成”文件夹。
+21. 如果 Excel 成功但归档失败，状态记为 EXCEL_WRITTEN_NOT_ARCHIVED；下次只重试归档，不再次追加 Excel。
+
+Excel 默认显示五个业务字段。PDF 哈希和处理信息建议放进隐藏工作表 _InvoiceReaderMeta，用来防止同一文件被重复追加。
+
+
+五、模板记忆方式
+================
+
+模板位置：
+
+%LOCALAPPDATA%\InvoiceReader\templates\<template_id>.yaml
+
+模板保存：
+
+- schema_version：模板结构版本。
+- template_id、display_name、company、version。
+- required_keywords：必须出现的稳定关键词。
+- optional_keywords：用于增加匹配分的关键词。
+- excluded_keywords：用于排除相似版式的关键词。
+- page_size_points：示例 PDF 的页面尺寸。
+- page_size_tolerance：页面尺寸允许误差，初始建议 2%。
+- 每个字段的页码和 bbox_normalized。
+- 字段数据类型、正则、必填状态和 OCR 参数。
+- 创建时间、更新时间和示例 PDF 哈希。
+
+模板不保存真实 Invoice No.、金额或 TAP 数值，避免把业务数据写入模板。
+
+字段框使用 0 到 1 的标准化坐标：
+
+bbox_normalized = [x0/page_width, y0/page_height,
+                   x1/page_width, y1/page_height]
+
+因此预览窗口缩放、屏幕分辨率变化不会影响模板。
+
+运行时 TemplateCompiler 根据当前 PDF 页面尺寸生成 invoice2data 的区域参数：
+
+- f：开始页。
+- l：结束页。
+- r：坐标分辨率，文字提取采用 72。
+- x、y：左上角坐标。
+- W、H：区域宽高。
+
+生成的 invoice2data YAML 只放在 cache\compiled_templates 中，可随时重新生成；用户 YAML 才是模板的真实数据源。
+
+自动匹配顺序：
+
+1. 获取首页文字；扫描件先 OCR 首页。
+2. 排除缺少必选关键词的模板。
+3. 排除命中 excluded_keywords 的模板。
+4. 检查页面尺寸是否在允许误差内。
+5. 根据可选关键词命中率计算匹配分。
+6. 最高分超过阈值且明显高于第二名时自动选择。
+7. 匹配不明确时让用户选择已有模板或新建模板。
+
+同一公司出现新版式时，新建 v2 模板，保留 v1，不能直接破坏旧版式。
+
+
+六、invoice2data 的集成方式
+===========================
+
+结论：通过 pip 安装，不 fork。
+
+建议固定：
+
+invoice2data[pdfium] == 1.0.1
+
+升级前必须使用现有模板和样本 PDF 运行回归测试。
+
+当前需要使用的公开接口：
+
+- Invoice2Data
+- extract_data
+- NoTemplateFoundError
+- RequiredFieldsMissingError
+- TemplateSyntaxError
+
+适配器调用流程：
+
+1. 创建 Invoice2Data(load_built_in_templates=False)。
+2. 使用 read_templates(path) 加载刚编译的临时模板。
+3. 调用顶层 extract_data()。
+4. templates 只传已经匹配的模板，避免多个模板竞争。
+5. input_module 使用 pdfium。
+6. ai_fallback 明确设置为 False，禁止联网 AI。
+7. raise_on_error 设置为 True，让 GUI 区分模板未匹配和字段缺失。
+
+不直接调用 invoice2data.input.*、私有下划线函数或 InvoiceTemplate.extract() 等内部实现。未来库接口变化时，只修改 invoice2data_adapter.py。
+
+
+七、文字层与 OCR 判断
+=====================
+
+TextProbe 使用 PyMuPDF 检查相关页面：
+
+- 有效单词数量是否至少约 5 个。
+- 字母和数字总数是否至少约 30 个。
+- 可打印字符比例是否足够高。
+- 是否大量出现乱码、替换字符或空白。
+- 是否只有 Logo 对应的少量隐藏文字。
+
+这些阈值放进 defaults.yaml，后续根据真实发票校准。
+
+采用两级 OCR 回退：
+
+1. 页面级回退
+   - 首页几乎没有文字时，OCR 首页用于模板匹配。
+
+2. 字段级回退
+   - PDF 整体有文字，但某个必填字段在框选区域为空或格式错误时，只 OCR 该字段矩形。
+
+OCR 流程：
+
+1. PyMuPDF 将页面或字段区域渲染成 300 DPI 图片。
+2. Pillow 可进行灰度、对比度和阈值预处理。
+3. pytesseract.image_to_data() 调用本地 Tesseract。
+4. 数字字段使用适合单行文字的 PSM，并限制数字字符。
+5. Invoice No. 允许字母、数字和连字符。
+6. OCR 结果仍经过统一清洗、类型转换和校验。
+
+审批界面必须特别标记 OCR：
+
+- 绿色：文字层。
+- 黄色：OCR。
+- 红色：OCR 低置信度或校验失败。
+- 蓝色：人工修改。
+
+只要任意字段使用 OCR，审批区顶部显示：
+
+“本张发票包含 OCR 识别结果，请重点核对黄色字段。”
+
+OCR 置信度来自 image_to_data() 的 token 置信度。初始可将低于 80 的字段标为低置信度，但所有 OCR 字段无论分数多高都保留黄色来源标记。
+
+
+八、依赖库清单
+==============
+
+建议开发和打包版本：Python 3.11 64-bit。
+
+必装运行依赖：
+
+- invoice2data[pdfium]：模板匹配和区域文字提取。
+- PyMuPDF：PDF 预览、文字层检测、坐标和图片渲染。
+- Pillow：Tkinter 图片显示和 OCR 图片预处理。
+- openpyxl：创建、读取和追加 .xlsx。
+- PyYAML：保存模板和配置。
+- platformdirs：获取 Windows 用户数据目录。
+- portalocker：避免多个程序实例同时写同一个 Excel。
+
+Tkinter、SQLite、hashlib、shutil、pathlib 等属于 Python 标准库，不需要 pip 安装。
+
+OCR 可选依赖：
+
+- pytesseract：Python 调用 Tesseract。
+- Tesseract Windows 二进制。
+- eng.traineddata：英文和数字识别语言包。
+
+开发和打包依赖：
+
+- pytest：单元测试。
+- pytest-cov：测试覆盖率。
+- ruff：代码检查和格式化。
+- PyInstaller：生成 Windows exe。
+- Inno Setup（可选）：制作单一安装包。
+
+OCR 在架构上是可选能力：
+
+- 没有 Tesseract 时，电子 PDF 仍可正常处理。
+- 遇到扫描件时显示“未安装 OCR”，保留在待处理队列，不允许错误归档。
+- 检测到 Tesseract 后自动启用 OCR 回退。
+
+建议提供两个构建：
+
+- InvoiceReader-Lite：不捆绑 Tesseract，预计约 60 到 120 MB。
+- InvoiceReader-Full：捆绑 Tesseract 和英文语言包，通常再增加约 40 到 80 MB。
+
+打包阶段优先使用 PyInstaller onedir，即一个 exe 加依赖目录。这样启动更快，也更容易捆绑 Tesseract。需要单一安装文件时，再用 Inno Setup 打成离线安装包。
+
+
+九、推荐开发顺序和验证点
+========================
+
+阶段 0：准备测试样本
+
+- 准备两种 PLMN 文件名样本。
+- 同一公司的至少两张同版式 PDF。
+- 两个不同公司的 PDF。
+- 一张扫描 PDF。
+- 一个目标 Excel 样本。
+- 确认最终 Excel 列名和 PLMN 正则。
+
+阶段 1：PDF 查看器和框选
+
+- 打开单张 PDF。
+- 翻页、缩放、滚动、画框。
+- 框内文字实时预览。
+- 验证缩放后坐标仍准确。
+
+阶段 2：文件名解析和数据模型
+
+- 实现两种 PLMN 文件名规则。
+- 实现 InvoiceRecord、ExtractedField 和状态模型。
+- 为文件名规则建立单元测试。
+
+阶段 3：模板保存、加载和匹配
+
+- 保存四个字段框、关键词和页面尺寸。
+- 重启程序后重新加载模板。
+- 第一张手动定义，第二张同版式自动匹配。
+
+阶段 4：接入 invoice2data
+
+- 实现 TemplateCompiler 和 Invoice2DataAdapter。
+- 使用 PDFium 提取电子 PDF 的区域文字。
+- 测试多张同模板 PDF。
+
+阶段 5：审批界面
+
+- 显示原始值、可编辑值、来源和校验结果。
+- 错误字段未修正前不能审批。
+- 人工修改后来源正确变为“人工修改”。
+
+阶段 6：Excel 追加和切换
+
+- 创建新月度 Excel。
+- 选择和切换已有 .xlsx。
+- 原子追加、文件锁和重复检测。
+- Excel 被占用时不得损坏文件或归档 PDF。
+
+阶段 7：归档和失败恢复
+
+- Excel 成功后移动 PDF。
+- 处理归档目录中的同名文件。
+- 模拟移动失败，验证重试不会重复写 Excel。
+
+阶段 8：批量队列
+
+- 扫描文件夹。
+- 当前 PDF 审批后自动进入下一张。
+- 支持未知模板、提取失败、已完成等状态过滤。
+- 用几十张 PDF 验证界面不冻结、不丢状态。
+
+阶段 9：OCR
+
+- 实现文字层质量检测。
+- 实现页面级和字段级 OCR。
+- 显示 OCR 来源、置信度和黄色警告。
+- 未安装 Tesseract 时给出明确提示。
+
+阶段 10：EXE 打包
+
+- 先打包 Lite，再打包 Full。
+- 在没有 Python、没有联网的 Windows 电脑验证。
+- 检查模板保存、Excel 追加、OCR 和重启恢复。
+
+
+十、需要保持不变的关键原则
+==========================
+
+1. invoice2data 只作为 pip 依赖，不 fork。
+2. 电子 PDF 使用 invoice2data + PDFium。
+3. 少数扫描件使用应用自己的 PyMuPDF + Tesseract OCR 服务。
+4. 所有提取结果都必须经过人工审批。
+5. OCR 字段必须突出标记。
+6. Excel 写入失败时绝不能归档 PDF。
+7. Excel 已写入但归档失败时，重试不得重复追加。
+8. 模板使用标准化 PDF 坐标，不保存预览窗口像素坐标。
+9. 用户模板和状态保存在 %LOCALAPPDATA%，不能依赖 exe 所在目录可写。
+10. 所有 AI/联网回退功能保持关闭，最终程序完全离线运行。
