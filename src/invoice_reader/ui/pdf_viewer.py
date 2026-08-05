@@ -79,13 +79,25 @@ class PdfViewer(ttk.Frame):
         return self._service.document_hash()
 
     def apply_template_fields(self, fields: dict[str, TemplateField]) -> None:
-        """Display all field locations from an applied template."""
+        """Display all field locations and read their text from the opened PDF."""
         self._field_locations = dict(fields)
-        self._field_texts = {field_name: "" for field_name in fields}
+        self._field_texts = {
+            field_name: self._extract_template_field_text(field)
+            for field_name, field in fields.items()
+        }
         self._selected_field = None
         if self._service.page_count:
             self._render_page()
         self._notify_fields_changed()
+
+    def _extract_template_field_text(self, field: TemplateField) -> str:
+        page_index = field.page_number - 1
+        page_width, page_height = self._service.page_size(page_index)
+        x0, y0, x1, y1 = field.bbox_normalized
+        return self._service.extract_text(
+            page_index,
+            fitz.Rect(x0 * page_width, y0 * page_height, x1 * page_width, y1 * page_height),
+        )
 
     def _build_toolbar(self) -> None:
         toolbar = ttk.Frame(self)

@@ -30,3 +30,7 @@ class TemplateRepository:
             yaml.safe_dump(template.to_mapping(), allow_unicode=True, sort_keys=False),
             encoding="utf-8",
         )
+
+    def delete(self, template_id: str) -> None:
+        """Delete the selected local template YAML file."""
+        (self._directory / f"{template_id}.yaml").unlink()

@@ -35,6 +35,7 @@ class MainWindow(ttk.Frame):
             on_field_selected=self._set_active_field,
             on_template_applied=self._apply_template,
             on_template_saved=self._save_template,
+            on_template_deleted=self._delete_template,
         )
         self._template_editor.pack(fill="x", pady=(0, 10))
 
@@ -103,12 +104,13 @@ class MainWindow(ttk.Frame):
 
     def _save_template(
         self,
+        template_id: str | None,
         display_name: str,
         company: str,
         required_keywords: list[str],
         optional_keywords: list[str],
     ) -> None:
-        """Compile the current four boxes and save them as a local YAML template."""
+        """Compile the current four boxes and save a new or changed local template."""
         try:
             template = self._template_compiler.compile(
                 display_name,
@@ -118,14 +120,30 @@ class MainWindow(ttk.Frame):
                 self._viewer.field_locations(),
                 self._viewer.first_page_size(),
                 self._viewer.document_hash(),
+                self._templates_by_id.get(template_id) if template_id is not None else None,
             )
         except (RuntimeError, ValueError) as error:
             self._template_editor.set_status(str(error))
             return
         self._template_repository.save(template)
-        self._templates.append(template)
+        if template_id is None:
+            self._templates.append(template)
+        else:
+            self._templates = [
+                template if current.template_id == template.template_id else current
+                for current in self._templates
+            ]
         self._templates_by_id[template.template_id] = template
         self._template_editor.set_templates(self._templates)
         self._template_editor.select_template(template)
         self._template_editor.set_status(f"已保存本地模板：{template.display_name}")
+
+    def _delete_template(self, template_id: str) -> None:
+        """Remove the selected YAML template from the local template library."""
+        template = self._templates_by_id.pop(template_id)
+        self._template_repository.delete(template_id)
+        self._templates = [current for current in self._templates if current.template_id != template_id]
+        self._template_editor.set_templates(self._templates)
+        self._template_editor.clear_template()
+        self._template_editor.set_status(f"已删除本机模板：{template.display_name}")
 
