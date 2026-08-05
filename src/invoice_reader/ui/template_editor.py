@@ -16,7 +16,7 @@ class TemplateEditor(ttk.LabelFrame):
         templates: list[InvoiceTemplate],
         on_field_selected: Callable[[str], None],
         on_template_applied: Callable[[str], None],
-        on_template_saved: Callable[[str, str, list[str], list[str]], None],
+        on_template_saved: Callable[[str | None, str, str, list[str], list[str]], None],
         on_template_deleted: Callable[[str], None],
     ) -> None:
         super().__init__(master, text="模板", padding=8)
@@ -124,13 +124,13 @@ class TemplateEditor(ttk.LabelFrame):
             self._on_template_applied(template_id)
 
     def _save_new_template(self) -> None:
-        self._on_template_saved(*self._form_values())
+        self._on_template_saved(None, *self._form_values())
 
     def _save_template_changes(self) -> None:
         if self._editing_template_id is None:
             self.set_status("请先应用一个已有模板，再保存修改。")
             return
-        self._on_template_saved(*self._form_values())
+        self._on_template_saved(self._editing_template_id, *self._form_values())
 
     def _delete_template(self) -> None:
         if self._editing_template_id is None:

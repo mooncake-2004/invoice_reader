@@ -114,6 +114,7 @@ class MainWindow(ttk.Frame):
 
     def _save_template(
         self,
+        template_id: str | None,
         display_name: str,
         company: str,
         required_keywords: list[str],
@@ -124,6 +125,9 @@ class MainWindow(ttk.Frame):
             self._template_editor.set_status("文件名未解析出 PLMN，不能保存模板。")
             return
         existing_template = self._template_repository.find_by_plmn(self._current_plmn)
+        selected_template = self._templates_by_id.get(template_id) if template_id is not None else None
+        if existing_template is None and selected_template is not None and not selected_template.plmn:
+            existing_template = selected_template
         if existing_template is not None and not messagebox.askyesno(
             "覆盖模板",
             f"PLMN {self._current_plmn} 已有模板，是否更新覆盖？",
