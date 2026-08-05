@@ -43,10 +43,6 @@ class PdfService:
         page = self._get_page(page_index)
         return page.get_text("text", clip=rectangle).strip()
 
-    def page_text(self, page_index: int) -> str:
-        """Return all text from one PDF page."""
-        return self._get_page(page_index).get_text("text")
-
     def page_size(self, page_index: int) -> tuple[float, float]:
         """Return one PDF page size in points."""
         rectangle = self._get_page(page_index).rect

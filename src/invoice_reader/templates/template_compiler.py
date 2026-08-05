@@ -16,6 +16,7 @@ class TemplateCompiler:
         self,
         display_name: str,
         company: str,
+        plmn: str,
         required_keywords: list[str],
         optional_keywords: list[str],
         fields: dict[str, TemplateField],
@@ -28,8 +29,8 @@ class TemplateCompiler:
             raise ValueError("请填写模板名。")
         if not company:
             raise ValueError("请填写公司名。")
-        if not required_keywords:
-            raise ValueError("请至少填写一个必需关键词。")
+        if not plmn:
+            raise ValueError("文件名未解析出 PLMN，不能保存模板。")
         if set(fields) != set(FIELD_NAMES):
             raise ValueError("请框选四个字段后再保存模板。")
 
@@ -39,6 +40,7 @@ class TemplateCompiler:
             template_id=uuid4().hex if existing_template is None else existing_template.template_id,
             display_name=display_name,
             company=company,
+            plmn=plmn,
             required_keywords=required_keywords,
             optional_keywords=optional_keywords,
             page_size_points=page_size_points,

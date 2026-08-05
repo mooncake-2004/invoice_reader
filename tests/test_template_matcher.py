@@ -1,22 +1,19 @@
-"""Tests for required-keyword, page-size, and score-based template matching."""
+"""Tests for PLMN-based template matching and page-size warnings."""
 
 from invoice_reader.templates.template_matcher import TemplateMatcher
 from invoice_reader.templates.template_models import InvoiceTemplate
 
 
-def _template(
-    template_id: str,
-    required_keywords: list[str],
-    optional_keywords: list[str],
-) -> InvoiceTemplate:
+def _template(plmn: str, page_size_points: tuple[float, float] = (595.0, 842.0)) -> InvoiceTemplate:
     return InvoiceTemplate(
         schema_version=1,
-        template_id=template_id,
-        display_name=template_id,
-        company="Example",
-        required_keywords=required_keywords,
-        optional_keywords=optional_keywords,
-        page_size_points=(595.0, 842.0),
+        template_id=plmn,
+        display_name="Example",
+        company="Company",
+        plmn=plmn,
+        required_keywords=["remark"],
+        optional_keywords=["remark"],
+        page_size_points=page_size_points,
         page_size_tolerance=0.02,
         fields={},
         created_at="2026-08-05T00:00:00+00:00",
@@ -25,23 +22,19 @@ def _template(
     )
 
 
-def test_matches_template_with_required_keywords_and_page_size() -> None:
-    template = _template("one", ["Invoice", "MACHT"], ["SDR", "TAP"])
-    matcher = TemplateMatcher(score_threshold=0.5, score_gap=0.2)
+def test_matches_template_by_plmn_without_using_keywords() -> None:
+    template = _template("ABCDE")
 
-    assert matcher.match([template], "INVOICE macHT SDR TAP", (595.0, 842.0)) is template
-
-
-def test_rejects_template_when_a_required_keyword_is_missing() -> None:
-    template = _template("one", ["Invoice", "MACHT"], [])
-    matcher = TemplateMatcher(score_threshold=0.5, score_gap=0.2)
-
-    assert matcher.match([template], "Invoice only", (595.0, 842.0)) is None
+    assert TemplateMatcher().match([template], "ABCDE") is template
 
 
-def test_rejects_ambiguous_top_scores() -> None:
-    first = _template("first", ["Invoice"], ["SDR"])
-    second = _template("second", ["Invoice"], ["SDR"])
-    matcher = TemplateMatcher(score_threshold=0.5, score_gap=0.2)
+def test_returns_none_for_unknown_plmn() -> None:
+    template = _template("ABCDE")
 
-    assert matcher.match([first, second], "Invoice SDR", (595.0, 842.0)) is None
+    assert TemplateMatcher().match([template], "ZZZZZ") is None
+
+
+def test_flags_large_page_size_difference_as_a_soft_warning() -> None:
+    template = _template("ABCDE")
+
+    assert TemplateMatcher().page_size_differs(template, (700.0, 842.0))

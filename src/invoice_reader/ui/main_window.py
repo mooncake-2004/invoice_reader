@@ -1,11 +1,12 @@
 """Main application layout."""
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
-from invoice_reader.infrastructure.defaults import template_matching_defaults
+from invoice_reader.infrastructure.defaults import template_defaults
 from invoice_reader.repositories.settings_repository import SettingsRepository
 from invoice_reader.services.pdf_service import PdfService
+from invoice_reader.services.filename_parser import FilenameParser
 from invoice_reader.templates.template_compiler import TemplateCompiler
 from invoice_reader.templates.template_matcher import TemplateMatcher
 from invoice_reader.templates.template_models import FIELD_LABELS, FIELD_NAMES, InvoiceTemplate
@@ -21,14 +22,16 @@ class MainWindow(ttk.Frame):
     def __init__(self, master: tk.Misc) -> None:
         super().__init__(master, padding=10)
 
-        defaults = template_matching_defaults()
+        defaults = template_defaults()
+        self._settings_repository = SettingsRepository()
+        self._current_plmn = ""
         self._template_repository = TemplateRepository()
         self._templates = self._template_repository.load_all()
         self._templates_by_id = {template.template_id: template for template in self._templates}
         self._template_compiler = TemplateCompiler(defaults.page_size_tolerance)
-        self._template_matcher = TemplateMatcher(defaults.score_threshold, defaults.score_gap)
+        self._template_matcher = TemplateMatcher()
 
-        FilenameParserPanel(self, SettingsRepository()).pack(fill="x", pady=(0, 10))
+        FilenameParserPanel(self, self._settings_repository).pack(fill="x", pady=(0, 10))
         self._template_editor = TemplateEditor(
             self,
             self._templates,
@@ -83,17 +86,24 @@ class MainWindow(ttk.Frame):
         self._text.configure(state="disabled")
 
     def _match_template(self, service: PdfService) -> None:
-        """Automatically apply one clear template match for a newly opened PDF."""
-        template = self._template_matcher.match(
-            self._templates,
-            service.page_text(0),
-            service.page_size(0),
-        )
+        """Parse the PDF filename PLMN and apply its local template directly."""
+        self._current_plmn = FilenameParser(
+            self._settings_repository.load_filename_patterns()
+        ).parse(service.path.name)
+        if not self._current_plmn:
+            self._template_editor.set_status("文件名未解析出 PLMN：请选择已有模板，或先配置文件名模式后新建。")
+            return
+        template = self._template_matcher.match(self._templates, self._current_plmn)
         if template is None:
-            self._template_editor.set_status("未找到明确匹配：请选择已有模板，或框选四个字段后新建模板。")
+            self._template_editor.set_status(
+                f"PLMN {self._current_plmn} 没有本机模板：请框选四个字段后新建。"
+            )
             return
         self._apply_template(template.template_id)
-        self._template_editor.set_status(f"自动匹配：{template.display_name}")
+        if self._template_matcher.page_size_differs(template, service.page_size(0)):
+            self._template_editor.set_status("版式可能变了，请核对字段位置。")
+        else:
+            self._template_editor.set_status(f"已按 PLMN {self._current_plmn} 自动套用模板。")
 
     def _apply_template(self, template_id: str) -> None:
         """Draw the selected template's four normalized field locations."""
@@ -104,29 +114,40 @@ class MainWindow(ttk.Frame):
 
     def _save_template(
         self,
-        template_id: str | None,
         display_name: str,
         company: str,
         required_keywords: list[str],
         optional_keywords: list[str],
     ) -> None:
-        """Compile the current four boxes and save a new or changed local template."""
+        """Save the current four boxes to the template keyed by the current PLMN."""
+        if not self._current_plmn:
+            self._template_editor.set_status("文件名未解析出 PLMN，不能保存模板。")
+            return
+        existing_template = self._template_repository.find_by_plmn(self._current_plmn)
+        if existing_template is not None and not messagebox.askyesno(
+            "覆盖模板",
+            f"PLMN {self._current_plmn} 已有模板，是否更新覆盖？",
+            parent=self,
+        ):
+            self._template_editor.set_status("已取消覆盖已有 PLMN 模板。")
+            return
         try:
             template = self._template_compiler.compile(
                 display_name,
                 company,
+                self._current_plmn,
                 required_keywords,
                 optional_keywords,
                 self._viewer.field_locations(),
                 self._viewer.first_page_size(),
                 self._viewer.document_hash(),
-                self._templates_by_id.get(template_id) if template_id is not None else None,
+                existing_template,
             )
         except (RuntimeError, ValueError) as error:
             self._template_editor.set_status(str(error))
             return
         self._template_repository.save(template)
-        if template_id is None:
+        if existing_template is None:
             self._templates.append(template)
         else:
             self._templates = [

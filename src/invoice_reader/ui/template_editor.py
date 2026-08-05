@@ -16,7 +16,7 @@ class TemplateEditor(ttk.LabelFrame):
         templates: list[InvoiceTemplate],
         on_field_selected: Callable[[str], None],
         on_template_applied: Callable[[str], None],
-        on_template_saved: Callable[[str | None, str, str, list[str], list[str]], None],
+        on_template_saved: Callable[[str, str, list[str], list[str]], None],
         on_template_deleted: Callable[[str], None],
     ) -> None:
         super().__init__(master, text="模板", padding=8)
@@ -104,10 +104,10 @@ class TemplateEditor(ttk.LabelFrame):
             row=1, column=5, sticky="w", padx=(4, 0), pady=(8, 0)
         )
 
-        ttk.Label(self, text="必需关键词（每行一条）").grid(row=2, column=0, sticky="nw", pady=(8, 0))
+        ttk.Label(self, text="必需关键词备注（每行一条）").grid(row=2, column=0, sticky="nw", pady=(8, 0))
         self._required_keywords = tk.Text(self, height=3, width=28)
         self._required_keywords.grid(row=2, column=1, columnspan=2, sticky="ew", padx=(6, 12), pady=(8, 0))
-        ttk.Label(self, text="可选关键词（每行一条）").grid(row=2, column=3, sticky="nw", pady=(8, 0))
+        ttk.Label(self, text="可选关键词备注（每行一条）").grid(row=2, column=3, sticky="nw", pady=(8, 0))
         self._optional_keywords = tk.Text(self, height=3, width=28)
         self._optional_keywords.grid(row=2, column=4, columnspan=2, sticky="ew", padx=(6, 0), pady=(8, 0))
 
@@ -124,13 +124,13 @@ class TemplateEditor(ttk.LabelFrame):
             self._on_template_applied(template_id)
 
     def _save_new_template(self) -> None:
-        self._on_template_saved(None, *self._form_values())
+        self._on_template_saved(*self._form_values())
 
     def _save_template_changes(self) -> None:
         if self._editing_template_id is None:
             self.set_status("请先应用一个已有模板，再保存修改。")
             return
-        self._on_template_saved(self._editing_template_id, *self._form_values())
+        self._on_template_saved(*self._form_values())
 
     def _delete_template(self) -> None:
         if self._editing_template_id is None:

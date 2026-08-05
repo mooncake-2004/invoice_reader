@@ -31,6 +31,10 @@ class TemplateRepository:
             encoding="utf-8",
         )
 
+    def find_by_plmn(self, plmn: str) -> InvoiceTemplate | None:
+        """Return the local template assigned to a PLMN, if one exists."""
+        return next((template for template in self.load_all() if template.plmn == plmn), None)
+
     def delete(self, template_id: str) -> None:
         """Delete the selected local template YAML file."""
         (self._directory / f"{template_id}.yaml").unlink()

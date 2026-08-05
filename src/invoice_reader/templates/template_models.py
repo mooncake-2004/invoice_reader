@@ -55,6 +55,7 @@ class InvoiceTemplate:
     template_id: str
     display_name: str
     company: str
+    plmn: str
     required_keywords: list[str]
     optional_keywords: list[str]
     page_size_points: tuple[float, float]
@@ -71,6 +72,7 @@ class InvoiceTemplate:
             "template_id": self.template_id,
             "display_name": self.display_name,
             "company": self.company,
+            "plmn": self.plmn,
             "required_keywords": self.required_keywords,
             "optional_keywords": self.optional_keywords,
             "page_size_points": list(self.page_size_points),
@@ -89,6 +91,7 @@ class InvoiceTemplate:
             template_id=str(data["template_id"]),
             display_name=str(data["display_name"]),
             company=str(data["company"]),
+            plmn=str(data.get("plmn", "")),
             required_keywords=[str(keyword) for keyword in data["required_keywords"]],
             optional_keywords=[str(keyword) for keyword in data["optional_keywords"]],
             page_size_points=tuple(float(value) for value in data["page_size_points"]),

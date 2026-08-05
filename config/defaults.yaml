@@ -1,4 +1,2 @@
 template_matching:
   page_size_tolerance: 0.02
-  score_threshold: 0.5
-  score_gap: 0.2
