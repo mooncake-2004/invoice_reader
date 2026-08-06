@@ -1,6 +1,6 @@
 """Extract template field values through invoice2data's PDFium backend."""
 
-from dataclasses import replace
+from datetime import datetime, timezone
 
 import fitz
 from invoice2data import extract_data
@@ -40,13 +40,37 @@ class Invoice2DataAdapter:
     def extract_field(
         self,
         pdf_path: str,
-        template: InvoiceTemplate,
+        plmn: str,
         field_name: str,
         field: TemplateField,
     ) -> ExtractedField:
         """Extract one current-invoice field without modifying the template."""
-        result = self._extract_result(pdf_path, replace(template, fields={field_name: field}))
+        result = self._extract_result(pdf_path, self._single_field_template(plmn, field_name, field))
         return self._result_field(result, field_name)
+
+    def _single_field_template(
+        self,
+        plmn: str,
+        field_name: str,
+        field: TemplateField,
+    ) -> InvoiceTemplate:
+        """Build the temporary extraction rule used by one-off field selection."""
+        now = datetime.now(timezone.utc).isoformat()
+        return InvoiceTemplate(
+            schema_version=1,
+            template_id="current-invoice-field",
+            display_name=plmn,
+            company=plmn,
+            plmn=plmn,
+            required_keywords=[],
+            optional_keywords=[],
+            page_size_points=(0.0, 0.0),
+            page_size_tolerance=0.0,
+            fields={field_name: field},
+            created_at=now,
+            updated_at=now,
+            sample_pdf_hash="",
+        )
 
     def _extract_result(self, pdf_path: str, template: InvoiceTemplate) -> dict[str, object]:
         page_sizes = self._page_sizes(pdf_path, template)

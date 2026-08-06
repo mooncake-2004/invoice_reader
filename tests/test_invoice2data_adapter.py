@@ -92,7 +92,7 @@ def test_extracts_one_current_invoice_field_without_changing_template(tmp_path) 
 
     field = Invoice2DataAdapter(TemplateCompiler(0.02)).extract_field(
         str(pdf_path),
-        template,
+        "ABCDE",
         "tap_end",
         replacement,
     )

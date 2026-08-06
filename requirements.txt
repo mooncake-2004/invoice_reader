@@ -3,4 +3,5 @@ Pillow>=10,<13
 PyYAML>=6,<7
 invoice2data>=1.0,<2
 pypdfium2>=5,<6
+openpyxl>=3.1,<4
 

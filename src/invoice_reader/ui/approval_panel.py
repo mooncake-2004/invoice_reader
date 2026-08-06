@@ -27,12 +27,14 @@ class ApprovalPanel(ttk.LabelFrame):
         on_field_focused: Callable[[str], None],
         on_reextract: Callable[[], None],
         on_field_reselection: Callable[[str], None],
+        on_template_save: Callable[[], None],
         on_approved: Callable[[InvoiceRecord], None],
     ) -> None:
         super().__init__(master, text="人工审批", padding=8)
         self._on_field_focused = on_field_focused
         self._on_reextract = on_reextract
         self._on_field_reselection = on_field_reselection
+        self._on_template_save = on_template_save
         self._on_approved = on_approved
         self._record: InvoiceRecord | None = None
         self._refreshing = False
@@ -41,6 +43,7 @@ class ApprovalPanel(ttk.LabelFrame):
         self._confidence_labels: dict[str, ttk.Label] = {}
         self._value_entries: dict[str, tk.Entry] = {}
         self._preview = tk.StringVar(value="提取完成后可在此审批字段。")
+        self._template_save_button: ttk.Button | None = None
         self._build()
 
     def show_record(self, record: InvoiceRecord) -> None:
@@ -53,6 +56,18 @@ class ApprovalPanel(ttk.LabelFrame):
             self._value_variables[field_name].set(field.value)
         self._refreshing = False
         self._refresh_rows()
+        self.set_template_save_action(None)
+
+    def set_template_save_action(self, template_exists: bool | None) -> None:
+        """Show the one-stop template action only when there are selected boxes."""
+        if self._template_save_button is None:
+            return
+        if template_exists is None:
+            self._template_save_button.grid_remove()
+            return
+        text = "更新模板" if template_exists else "保存为新模板"
+        self._template_save_button.configure(text=text)
+        self._template_save_button.grid()
 
     def show_preview(self, texts: dict[str, str]) -> None:
         """Keep the existing manual-box text preview before extraction exists."""
@@ -137,6 +152,15 @@ class ApprovalPanel(ttk.LabelFrame):
             sticky="w",
             padx=(8, 0),
         )
+        self._template_save_button = ttk.Button(self, command=self._on_template_save)
+        self._template_save_button.grid(
+            row=len(FIELD_NAMES) + 2,
+            column=2,
+            columnspan=2,
+            sticky="w",
+            padx=(8, 0),
+        )
+        self._template_save_button.grid_remove()
         ttk.Label(self, textvariable=self._preview, wraplength=300).grid(
             row=len(FIELD_NAMES) + 3,
             column=0,
