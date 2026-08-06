@@ -1,7 +1,7 @@
 """Main application layout."""
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 from invoice_reader.infrastructure.defaults import template_defaults
 from invoice_reader.repositories.settings_repository import SettingsRepository
@@ -115,15 +115,19 @@ class MainWindow(ttk.Frame):
     def _save_template(
         self,
         template_id: str | None,
-        display_name: str,
-        company: str,
         required_keywords: list[str],
         optional_keywords: list[str],
     ) -> None:
         """Save the current four boxes to the template keyed by the current PLMN."""
         if not self._current_plmn:
-            self._template_editor.set_status("文件名未解析出 PLMN，不能保存模板。")
-            return
+            plmn = simpledialog.askstring("手动填写 PLMN", "文件名未解析出 PLMN，请手动填写：", parent=self)
+            if plmn is None:
+                self._template_editor.set_status("已取消保存模板。")
+                return
+            self._current_plmn = plmn.strip()
+            if not self._current_plmn:
+                self._template_editor.set_status("PLMN 不能为空，未保存模板。")
+                return
         existing_template = self._template_repository.find_by_plmn(self._current_plmn)
         selected_template = self._templates_by_id.get(template_id) if template_id is not None else None
         if existing_template is None and selected_template is not None and not selected_template.plmn:
@@ -137,8 +141,8 @@ class MainWindow(ttk.Frame):
             return
         try:
             template = self._template_compiler.compile(
-                display_name,
-                company,
+                self._current_plmn,
+                self._current_plmn,
                 self._current_plmn,
                 required_keywords,
                 optional_keywords,
@@ -161,7 +165,7 @@ class MainWindow(ttk.Frame):
         self._templates_by_id[template.template_id] = template
         self._template_editor.set_templates(self._templates)
         self._template_editor.select_template(template)
-        self._template_editor.set_status(f"已保存本地模板：{template.display_name}")
+        self._template_editor.set_status(f"已保存模板，关联 PLMN: {template.plmn}")
 
     def _delete_template(self, template_id: str) -> None:
         """Remove the selected YAML template from the local template library."""

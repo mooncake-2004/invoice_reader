@@ -8,7 +8,7 @@ from invoice_reader.templates.template_models import FIELD_LABELS, FIELD_NAMES, 
 
 
 class TemplateEditor(ttk.LabelFrame):
-    """Collect inputs for creating, editing, applying, and deleting a template."""
+    """Collect field selection and keyword notes for PLMN-keyed templates."""
 
     def __init__(
         self,
@@ -16,7 +16,7 @@ class TemplateEditor(ttk.LabelFrame):
         templates: list[InvoiceTemplate],
         on_field_selected: Callable[[str], None],
         on_template_applied: Callable[[str], None],
-        on_template_saved: Callable[[str | None, str, str, list[str], list[str]], None],
+        on_template_saved: Callable[[str | None, list[str], list[str]], None],
         on_template_deleted: Callable[[str], None],
     ) -> None:
         super().__init__(master, text="模板", padding=8)
@@ -26,9 +26,7 @@ class TemplateEditor(ttk.LabelFrame):
         self._on_template_deleted = on_template_deleted
         self._field = tk.StringVar(value=FIELD_LABELS[FIELD_NAMES[0]])
         self._existing_template = tk.StringVar()
-        self._display_name = tk.StringVar()
-        self._company = tk.StringVar()
-        self._status = tk.StringVar(value="打开 PDF 后自动匹配，或手动框选四个字段新建模板。")
+        self._status = tk.StringVar(value="打开 PDF 后按 PLMN 自动匹配，或手动框选四个字段新建模板。")
         self._template_labels: dict[str, str] = {}
         self._editing_template_id: str | None = None
 
@@ -43,11 +41,9 @@ class TemplateEditor(ttk.LabelFrame):
         self._existing_template_combo.configure(values=list(self._template_labels))
 
     def select_template(self, template: InvoiceTemplate) -> None:
-        """Load an applied template into the editor for optional modification."""
+        """Load an applied template's keyword notes for optional modification."""
         self._editing_template_id = template.template_id
         self._existing_template.set(self._template_label(template))
-        self._display_name.set(template.display_name)
-        self._company.set(template.company)
         self._set_keywords(self._required_keywords, template.required_keywords)
         self._set_keywords(self._optional_keywords, template.optional_keywords)
 
@@ -55,8 +51,6 @@ class TemplateEditor(ttk.LabelFrame):
         """Clear the editing state after deletion."""
         self._editing_template_id = None
         self._existing_template.set("")
-        self._display_name.set("")
-        self._company.set("")
         self._set_keywords(self._required_keywords, [])
         self._set_keywords(self._optional_keywords, [])
 
@@ -89,13 +83,8 @@ class TemplateEditor(ttk.LabelFrame):
         ttk.Button(self, text="应用模板", command=self._apply_template).grid(row=0, column=4, sticky="w")
         ttk.Button(self, text="删除模板", command=self._delete_template).grid(row=0, column=5, sticky="w", padx=(4, 0))
 
-        ttk.Label(self, text="模板名").grid(row=1, column=0, sticky="w", pady=(8, 0))
-        ttk.Entry(self, textvariable=self._display_name).grid(
-            row=1, column=1, sticky="ew", padx=(6, 12), pady=(8, 0)
-        )
-        ttk.Label(self, text="公司名").grid(row=1, column=2, sticky="w", pady=(8, 0))
-        ttk.Entry(self, textvariable=self._company).grid(
-            row=1, column=3, sticky="ew", padx=(6, 4), pady=(8, 0)
+        ttk.Label(self, text="模板名和公司名会自动使用当前 PLMN。").grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(8, 0)
         )
         ttk.Button(self, text="保存新模板", command=self._save_new_template).grid(
             row=1, column=4, sticky="w", pady=(8, 0)
@@ -124,13 +113,13 @@ class TemplateEditor(ttk.LabelFrame):
             self._on_template_applied(template_id)
 
     def _save_new_template(self) -> None:
-        self._on_template_saved(None, *self._form_values())
+        self._on_template_saved(None, *self._keyword_notes())
 
     def _save_template_changes(self) -> None:
         if self._editing_template_id is None:
             self.set_status("请先应用一个已有模板，再保存修改。")
             return
-        self._on_template_saved(self._editing_template_id, *self._form_values())
+        self._on_template_saved(self._editing_template_id, *self._keyword_notes())
 
     def _delete_template(self) -> None:
         if self._editing_template_id is None:
@@ -139,13 +128,8 @@ class TemplateEditor(ttk.LabelFrame):
         if messagebox.askyesno("删除模板", "确定删除当前本机模板吗？", parent=self):
             self._on_template_deleted(self._editing_template_id)
 
-    def _form_values(self) -> tuple[str, str, list[str], list[str]]:
-        return (
-            self._display_name.get().strip(),
-            self._company.get().strip(),
-            self._keywords(self._required_keywords),
-            self._keywords(self._optional_keywords),
-        )
+    def _keyword_notes(self) -> tuple[list[str], list[str]]:
+        return self._keywords(self._required_keywords), self._keywords(self._optional_keywords)
 
     def _keywords(self, widget: tk.Text) -> list[str]:
         return [line.strip() for line in widget.get("1.0", "end-1c").splitlines() if line.strip()]
