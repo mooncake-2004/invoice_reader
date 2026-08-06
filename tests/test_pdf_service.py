@@ -2,6 +2,7 @@
 
 import fitz
 
+from invoice_reader.archive.archive_service import ArchiveService
 from invoice_reader.services.pdf_service import PdfService
 
 
@@ -21,3 +22,36 @@ def test_renames_open_pdf_and_updates_its_path(tmp_path) -> None:
     assert renamed_path.exists()
     assert service.path == renamed_path
     assert service.page_count == 1
+
+
+def test_close_releases_the_opened_pdf_reference(tmp_path) -> None:
+    pdf_path = tmp_path / "invoice.pdf"
+    document = fitz.open()
+    document.new_page()
+    document.save(pdf_path)
+    document.close()
+    service = PdfService()
+    service.open(str(pdf_path))
+
+    service.close()
+
+    assert service.path is None
+    assert service.page_count == 0
+
+
+def test_can_archive_after_closing_the_opened_pdf(tmp_path) -> None:
+    pdf_path = tmp_path / "invoice.pdf"
+    archive_directory = tmp_path / "archive"
+    archive_directory.mkdir()
+    document = fitz.open()
+    document.new_page()
+    document.save(pdf_path)
+    document.close()
+    service = PdfService()
+    service.open(str(pdf_path))
+    service.close()
+
+    archive_path = ArchiveService().archive(str(pdf_path), str(archive_directory))
+
+    assert archive_path == str(archive_directory / "invoice.pdf")
+    assert not pdf_path.exists()

@@ -84,6 +84,24 @@ class PdfViewer(ttk.Frame):
         """Return the hash of the PDF used as the template sample."""
         return self._service.document_hash()
 
+    def close_current_pdf(self) -> None:
+        """Release the opened PDF handle and clear the viewer before archiving."""
+        self._cancel_scheduled_text_update()
+        self._service.close()
+        self._canvas.delete("all")
+        self._canvas.configure(scrollregion=(0, 0, 0, 0))
+        self._image = None
+        self._page_index = 0
+        self._page_width = 0
+        self._page_height = 0
+        self._field_locations.clear()
+        self._field_texts.clear()
+        self._overlays.clear()
+        self._drawing_overlay = None
+        self._selected_field = None
+        self._one_time_field = None
+        self._status.set("已关闭当前 PDF，请打开下一张。")
+
     def apply_template_fields(self, fields: dict[str, TemplateField]) -> None:
         """Display all field locations from the selected local template."""
         self._field_locations = dict(fields)

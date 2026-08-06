@@ -321,6 +321,7 @@ class MainWindow(ttk.Frame):
         self._write_approved_record(self._record, self._approved_at, retry=True)
 
     def _archive_pdf(self, record: InvoiceRecord, approved_at: str) -> None:
+        self._viewer.close_current_pdf()
         try:
             archive_path = self._archive_service.archive(record.file_path, self._archive_directory)
         except ArchiveConflictError as error:
