@@ -86,6 +86,20 @@ class PdfViewer(ttk.Frame):
         if self._service.page_count:
             self._render_page()
 
+    def highlight_field(self, field_name: str) -> None:
+        """Briefly highlight one template field for approval-side comparison."""
+        field = self._field_locations.get(field_name)
+        if field is None:
+            return
+        if field.page_number != self._page_index + 1:
+            self._page_index = field.page_number - 1
+            self._render_page()
+        overlay = self._overlays.get(field_name)
+        if overlay is None:
+            return
+        self._canvas.itemconfigure(overlay.rectangle_id, outline="#d83b01", width=3)
+        self.after(500, lambda: self._set_overlay_outline(overlay))
+
     def _build_toolbar(self) -> None:
         toolbar = ttk.Frame(self)
         toolbar.pack(fill="x", pady=(0, 8))
@@ -129,6 +143,7 @@ class PdfViewer(ttk.Frame):
         path = filedialog.askopenfilename(
             title="选择 PDF",
             filetypes=[("PDF 文件", "*.pdf")],
+            parent=self.winfo_toplevel(),
         )
         if not path:
             return
@@ -136,7 +151,7 @@ class PdfViewer(ttk.Frame):
         try:
             self._service.open(path)
         except (fitz.FileDataError, OSError, RuntimeError) as error:
-            messagebox.showerror("无法打开 PDF", str(error), parent=self)
+            messagebox.showerror("无法打开 PDF", str(error), parent=self.winfo_toplevel())
             return
 
         self._page_index = 0

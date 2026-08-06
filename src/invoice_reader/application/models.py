@@ -20,6 +20,7 @@ class ValidationStatus(StrEnum):
     UNVALIDATED = "unvalidated"
     VALID = "valid"
     INVALID = "invalid"
+    APPROVED = "approved"
 
 
 @dataclass

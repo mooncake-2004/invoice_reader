@@ -125,7 +125,11 @@ class TemplateEditor(ttk.LabelFrame):
         if self._editing_template_id is None:
             self.set_status("请先应用一个已有模板，再删除。")
             return
-        if messagebox.askyesno("删除模板", "确定删除当前本机模板吗？", parent=self):
+        if messagebox.askyesno(
+            "删除模板",
+            "确定删除当前本机模板吗？",
+            parent=self.winfo_toplevel(),
+        ):
             self._on_template_deleted(self._editing_template_id)
 
     def _keyword_notes(self) -> tuple[list[str], list[str]]:

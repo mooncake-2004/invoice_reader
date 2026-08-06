@@ -41,7 +41,11 @@ class FilenameParserPanel(ttk.LabelFrame):
         self._patterns.insert("1.0", "\n".join(self._settings_repository.load_filename_patterns()))
 
     def _select_pdf(self) -> None:
-        path = filedialog.askopenfilename(title="选择 PDF", filetypes=[("PDF 文件", "*.pdf")])
+        path = filedialog.askopenfilename(
+            title="选择 PDF",
+            filetypes=[("PDF 文件", "*.pdf")],
+            parent=self.winfo_toplevel(),
+        )
         if path:
             self._filename.set(Path(path).name)
 

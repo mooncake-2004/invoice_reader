@@ -11,11 +11,12 @@ from invoice_reader.services.pdf_service import PdfService
 from invoice_reader.services.filename_parser import FilenameParser
 from invoice_reader.templates.template_compiler import TemplateCompiler
 from invoice_reader.templates.template_matcher import TemplateMatcher
-from invoice_reader.templates.template_models import FIELD_LABELS, FIELD_NAMES, InvoiceTemplate
+from invoice_reader.templates.template_models import InvoiceTemplate
 from invoice_reader.templates.template_repository import TemplateRepository
 from invoice_reader.ui.filename_parser_panel import FilenameParserPanel
 from invoice_reader.ui.pdf_viewer import PdfViewer
 from invoice_reader.ui.plmn_resolution_dialog import PlmnResolutionDialog
+from invoice_reader.ui.approval_panel import ApprovalPanel
 from invoice_reader.ui.template_editor import TemplateEditor
 
 
@@ -30,6 +31,7 @@ class MainWindow(ttk.Frame):
         self._current_plmn = ""
         self._current_pdf_path = ""
         self._record: InvoiceRecord | None = None
+        self._current_template: InvoiceTemplate | None = None
         self._template_repository = TemplateRepository()
         self._templates = self._template_repository.load_all()
         self._templates_by_id = {template.template_id: template for template in self._templates}
@@ -60,56 +62,32 @@ class MainWindow(ttk.Frame):
 
         side_panel = ttk.Frame(content, padding=(10, 0, 0, 0))
         content.add(side_panel, weight=1)
-
-        ttk.Label(side_panel, text="字段文字", font=("Microsoft YaHei UI", 11, "bold")).pack(
-            anchor="w"
-        )
-        ttk.Label(
+        self._approval_panel = ApprovalPanel(
             side_panel,
-            text="顶部选择字段后拖拽框选。框会按字段和页码保存；点击框后按 Delete 删除。",
-            wraplength=260,
-        ).pack(anchor="w", pady=(4, 8))
-
-        self._text = tk.Text(side_panel, wrap="word", height=20, state="disabled")
-        self._text.pack(fill="both", expand=True)
+            on_field_focused=self._viewer.highlight_field,
+            on_reextract=self._reextract,
+            on_approved=self._approve_record,
+        )
+        self._approval_panel.pack(fill="both", expand=True)
 
     def _set_active_field(self, field_name: str) -> None:
         """Route the template editor's field selection to the PDF viewer."""
         self._viewer.set_active_field(field_name)
 
     def _show_field_texts(self, texts: dict[str, str]) -> None:
-        """Preview raw text while the user is drawing a new field box."""
-        self._text.configure(state="normal")
-        self._text.delete("1.0", "end")
-        self._text.insert(
-            "1.0",
-            "\n".join(
-                f"{FIELD_LABELS[field_name]}: {texts[field_name]}"
-                for field_name in FIELD_NAMES
-                if field_name in texts
-            ),
-        )
-        self._text.configure(state="disabled")
+        """Show manual-box text until a structured record is extracted."""
+        self._approval_panel.show_preview(texts)
 
     def _show_record(self, record: InvoiceRecord) -> None:
-        """Show invoice2data/PDFium field values and their extraction details."""
-        self._text.configure(state="normal")
-        self._text.delete("1.0", "end")
-        self._text.insert(
-            "1.0",
-            "\n".join(
-                f"{FIELD_LABELS[field_name]}: {getattr(record, field_name).value}\n"
-                f"来源: {getattr(record, field_name).source} | "
-                f"置信度: {getattr(record, field_name).confidence:.0%}"
-                for field_name in FIELD_NAMES
-            ),
-        )
-        self._text.configure(state="disabled")
+        """Show one structured record in the approval panel."""
+        self._approval_panel.show_record(record)
 
     def _match_template(self, service: PdfService) -> None:
         """Parse the PDF filename PLMN and apply its local template directly."""
         self._current_pdf_path = str(service.path)
         self._record = None
+        self._current_template = None
+        self._approval_panel.clear()
         parser = FilenameParser(self._settings_repository.load_filename_patterns())
         self._current_plmn = parser.parse(service.path.name)
         if not self._current_plmn:
@@ -136,7 +114,11 @@ class MainWindow(ttk.Frame):
             if action is None:
                 return ""
             if action == "manual":
-                plmn = simpledialog.askstring("手动输入 PLMN", "请输入 PLMN：", parent=self)
+                plmn = simpledialog.askstring(
+                    "手动输入 PLMN",
+                    "请输入 PLMN：",
+                    parent=self.winfo_toplevel(),
+                )
                 return "" if plmn is None else plmn.strip()
 
             current_name = service.path.name
@@ -144,12 +126,16 @@ class MainWindow(ttk.Frame):
                 "重命名 PDF 文件",
                 "请输入新的文件名：",
                 initialvalue=current_name,
-                parent=self,
+                parent=self.winfo_toplevel(),
             )
             if filename is None:
                 return ""
             if not filename.strip():
-                messagebox.showwarning("文件名不能为空", "请输入新的 PDF 文件名。", parent=self)
+                messagebox.showwarning(
+                    "文件名不能为空",
+                    "请输入新的 PDF 文件名。",
+                    parent=self.winfo_toplevel(),
+                )
                 continue
             try:
                 service.rename_current(filename.strip())
@@ -157,7 +143,7 @@ class MainWindow(ttk.Frame):
                 messagebox.showerror(
                     "无法重命名文件",
                     f"PDF 文件可能正被其他程序占用，或新文件名已存在。\n\n{error}",
-                    parent=self,
+                    parent=self.winfo_toplevel(),
                 )
                 continue
             self._current_pdf_path = str(service.path)
@@ -167,12 +153,13 @@ class MainWindow(ttk.Frame):
             messagebox.showwarning(
                 "仍无法解析 PLMN",
                 "重命名后仍无法从文件名解析 PLMN，请重新选择处理方式。",
-                parent=self,
+                parent=self.winfo_toplevel(),
             )
 
     def _apply_template(self, template_id: str) -> None:
         """Draw the template locations and extract its structured field values."""
         template = self._templates_by_id[template_id]
+        self._current_template = template
         self._viewer.apply_template_fields(template.fields)
         self._record = self._invoice2data_adapter.extract(
             self._current_pdf_path,
@@ -183,6 +170,23 @@ class MainWindow(ttk.Frame):
         self._template_editor.select_template(template)
         self._template_editor.set_status(f"已应用模板：{template.display_name}")
 
+    def _reextract(self) -> None:
+        """Run PDFium extraction again using the current template boxes."""
+        if self._current_template is None:
+            return
+        self._current_template.fields = self._viewer.field_locations()
+        self._record = self._invoice2data_adapter.extract(
+            self._current_pdf_path,
+            self._current_template,
+            self._current_plmn,
+        )
+        self._show_record(self._record)
+        self._template_editor.set_status("已重新提取，请审批字段。")
+
+    def _approve_record(self, _record: InvoiceRecord) -> None:
+        """Reflect the completed approval state in the existing status area."""
+        self._template_editor.set_status("当前发票已审批。")
+
     def _save_template(
         self,
         template_id: str | None,
@@ -191,7 +195,11 @@ class MainWindow(ttk.Frame):
     ) -> None:
         """Save the current four boxes to the template keyed by the current PLMN."""
         if not self._current_plmn:
-            plmn = simpledialog.askstring("手动填写 PLMN", "文件名未解析出 PLMN，请手动填写：", parent=self)
+            plmn = simpledialog.askstring(
+                "手动填写 PLMN",
+                "文件名未解析出 PLMN，请手动填写：",
+                parent=self.winfo_toplevel(),
+            )
             if plmn is None:
                 self._template_editor.set_status("已取消保存模板。")
                 return
@@ -206,7 +214,7 @@ class MainWindow(ttk.Frame):
         if existing_template is not None and not messagebox.askyesno(
             "覆盖模板",
             f"PLMN {self._current_plmn} 已有模板，是否更新覆盖？",
-            parent=self,
+                parent=self.winfo_toplevel(),
         ):
             self._template_editor.set_status("已取消覆盖已有 PLMN 模板。")
             return
