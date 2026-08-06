@@ -10,7 +10,6 @@ from PIL import ImageTk
 
 from invoice_reader.services.pdf_service import PdfService
 from invoice_reader.templates.template_models import (
-    FIELD_LABELS,
     FIELD_NAMES,
     TemplateField,
     create_template_field,
@@ -23,7 +22,6 @@ class FieldOverlay:
 
     field_name: str
     rectangle_id: int
-    label_id: int
 
 
 class PdfViewer(ttk.Frame):
@@ -265,14 +263,6 @@ class PdfViewer(ttk.Frame):
                 fill="",
                 width=2,
             ),
-            label_id=self._canvas.create_text(
-                min(x0, x1) + 4,
-                min(y0, y1) + 4,
-                anchor="nw",
-                fill="#0078d4",
-                font=("Segoe UI", 10, "bold"),
-                text=FIELD_LABELS[field_name],
-            ),
         )
         self._overlays[field_name] = overlay
         self._set_overlay_outline(overlay)
@@ -310,7 +300,6 @@ class PdfViewer(ttk.Frame):
         start_x, start_y, _, _ = self._canvas.coords(overlay.rectangle_id)
         end_x, end_y = self._canvas_point(event)
         self._canvas.coords(overlay.rectangle_id, start_x, start_y, end_x, end_y)
-        self._canvas.coords(overlay.label_id, min(start_x, end_x) + 4, min(start_y, end_y) + 4)
         self._schedule_selection_text_update()
 
     def _finish_selection(self, event: tk.Event) -> None:
@@ -404,7 +393,6 @@ class PdfViewer(ttk.Frame):
         overlay = self._overlays.pop(field_name, None)
         if overlay is not None:
             self._canvas.delete(overlay.rectangle_id)
-            self._canvas.delete(overlay.label_id)
         self._field_locations.pop(field_name, None)
         self._field_texts.pop(field_name, None)
         if self._selected_field == field_name:
