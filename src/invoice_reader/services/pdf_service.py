@@ -1,6 +1,7 @@
 """PDF loading, rendering, and text extraction."""
 
 import hashlib
+import os
 from pathlib import Path
 
 import fitz
@@ -31,6 +32,23 @@ class PdfService:
             self._document.close()
         self._document = None
         self.path = None
+
+    def rename_current(self, filename: str) -> Path:
+        """Rename the opened PDF on disk and reopen it at its new path."""
+        if self.path is None:
+            raise RuntimeError("No PDF is open.")
+        current_path = self.path
+        target_path = current_path.with_name(filename)
+        if target_path == current_path:
+            return current_path
+        self.close()
+        try:
+            os.rename(current_path, target_path)
+        except OSError:
+            self.open(str(current_path))
+            raise
+        self.open(str(target_path))
+        return target_path
 
     def render_page(self, page_index: int, zoom: float) -> Image.Image:
         """Render one PDF page at the requested zoom level."""

@@ -15,6 +15,7 @@ from invoice_reader.templates.template_models import FIELD_LABELS, FIELD_NAMES, 
 from invoice_reader.templates.template_repository import TemplateRepository
 from invoice_reader.ui.filename_parser_panel import FilenameParserPanel
 from invoice_reader.ui.pdf_viewer import PdfViewer
+from invoice_reader.ui.plmn_resolution_dialog import PlmnResolutionDialog
 from invoice_reader.ui.template_editor import TemplateEditor
 
 
@@ -109,9 +110,10 @@ class MainWindow(ttk.Frame):
         """Parse the PDF filename PLMN and apply its local template directly."""
         self._current_pdf_path = str(service.path)
         self._record = None
-        self._current_plmn = FilenameParser(
-            self._settings_repository.load_filename_patterns()
-        ).parse(service.path.name)
+        parser = FilenameParser(self._settings_repository.load_filename_patterns())
+        self._current_plmn = parser.parse(service.path.name)
+        if not self._current_plmn:
+            self._current_plmn = self._resolve_unparsed_plmn(service, parser)
         if not self._current_plmn:
             self._template_editor.set_status("文件名未解析出 PLMN：请选择已有模板，或先配置文件名模式后新建。")
             return
@@ -126,6 +128,47 @@ class MainWindow(ttk.Frame):
             self._template_editor.set_status("版式可能变了，请核对字段位置。")
         else:
             self._template_editor.set_status(f"已按 PLMN {self._current_plmn} 自动套用模板。")
+
+    def _resolve_unparsed_plmn(self, service: PdfService, parser: FilenameParser) -> str:
+        """Resolve an unmatched filename by renaming it or entering a PLMN."""
+        while True:
+            action = PlmnResolutionDialog.ask(self)
+            if action is None:
+                return ""
+            if action == "manual":
+                plmn = simpledialog.askstring("手动输入 PLMN", "请输入 PLMN：", parent=self)
+                return "" if plmn is None else plmn.strip()
+
+            current_name = service.path.name
+            filename = simpledialog.askstring(
+                "重命名 PDF 文件",
+                "请输入新的文件名：",
+                initialvalue=current_name,
+                parent=self,
+            )
+            if filename is None:
+                return ""
+            if not filename.strip():
+                messagebox.showwarning("文件名不能为空", "请输入新的 PDF 文件名。", parent=self)
+                continue
+            try:
+                service.rename_current(filename.strip())
+            except OSError as error:
+                messagebox.showerror(
+                    "无法重命名文件",
+                    f"PDF 文件可能正被其他程序占用，或新文件名已存在。\n\n{error}",
+                    parent=self,
+                )
+                continue
+            self._current_pdf_path = str(service.path)
+            plmn = parser.parse(service.path.name)
+            if plmn:
+                return plmn
+            messagebox.showwarning(
+                "仍无法解析 PLMN",
+                "重命名后仍无法从文件名解析 PLMN，请重新选择处理方式。",
+                parent=self,
+            )
 
     def _apply_template(self, template_id: str) -> None:
         """Draw the template locations and extract its structured field values."""
