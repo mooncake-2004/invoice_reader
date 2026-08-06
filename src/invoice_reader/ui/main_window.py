@@ -192,7 +192,7 @@ class MainWindow(ttk.Frame):
             ]
         self._templates_by_id[template.template_id] = template
         self._template_editor.set_templates(self._templates)
-        self._template_editor.select_template(template)
+        self._apply_template(template.template_id)
         self._template_editor.set_status(f"已保存模板，关联 PLMN: {template.plmn}")
 
     def _delete_template(self, template_id: str) -> None:
