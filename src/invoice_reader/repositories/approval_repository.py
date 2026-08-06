@@ -14,17 +14,29 @@ class ApprovalRepository:
     def __init__(self, path: Path | None = None) -> None:
         self._path = approval_records_path() if path is None else path
 
-    def find_by_pdf_path(self, pdf_path: str) -> dict[str, str] | None:
+    def find_by_pdf_path(self, pdf_path: str) -> dict[str, object] | None:
         """Return the saved approval record for the exact PDF path, if any."""
         absolute_path = str(Path(pdf_path).resolve())
         return next(
-            (record for record in self._load() if record["pdf_file_path"] == absolute_path),
+            (
+                record
+                for record in self._load()
+                if record["pdf_file_path"] == absolute_path or record.get("archive_path") == absolute_path
+            ),
             None,
         )
 
-    def save(self, record: InvoiceRecord, approved_at: str, excel_path: str) -> None:
+    def save(
+        self,
+        record: InvoiceRecord,
+        approved_at: str,
+        excel_path: str,
+        excel_written: bool,
+        archive_path: str = "",
+        archived: bool = False,
+    ) -> None:
         """Add or replace the saved record for this PDF path."""
-        entry = self._entry(record, approved_at, excel_path)
+        entry = self._entry(record, approved_at, excel_path, excel_written, archive_path, archived)
         records = [
             saved for saved in self._load() if saved["pdf_file_path"] != entry["pdf_file_path"]
         ]
@@ -32,12 +44,20 @@ class ApprovalRepository:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def _load(self) -> list[dict[str, str]]:
+    def _load(self) -> list[dict[str, object]]:
         if not self._path.exists():
             return []
         return [dict(record) for record in json.loads(self._path.read_text(encoding="utf-8"))]
 
-    def _entry(self, record: InvoiceRecord, approved_at: str, excel_path: str) -> dict[str, str]:
+    def _entry(
+        self,
+        record: InvoiceRecord,
+        approved_at: str,
+        excel_path: str,
+        excel_written: bool,
+        archive_path: str,
+        archived: bool,
+    ) -> dict[str, str | bool]:
         return {
             "plmn": record.plmn.value,
             "invoice_no": record.invoice_no.value,
@@ -47,4 +67,7 @@ class ApprovalRepository:
             "approved_at": approved_at,
             "pdf_file_path": str(Path(record.file_path).resolve()),
             "excel_path": excel_path,
+            "excel_written": excel_written,
+            "archive_path": archive_path,
+            "archived": archived,
         }

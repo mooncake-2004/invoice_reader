@@ -5,6 +5,8 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+from invoice_reader.archive.archive_errors import ArchiveConflictError, ArchiveError
+from invoice_reader.archive.archive_service import ArchiveService
 from invoice_reader.application.job_state import InvoiceStatus
 from invoice_reader.application.models import ExtractedField, FieldSource, InvoiceRecord, ValidationStatus
 from invoice_reader.excel.excel_errors import DuplicatePlmnError, ExcelHeaderError, ExcelLockedError
@@ -23,6 +25,8 @@ from invoice_reader.ui.filename_parser_panel import FilenameParserPanel
 from invoice_reader.ui.pdf_viewer import PdfViewer
 from invoice_reader.ui.plmn_resolution_dialog import PlmnResolutionDialog
 from invoice_reader.ui.approval_panel import ApprovalPanel
+from invoice_reader.ui.archive_panel import ArchivePanel
+from invoice_reader.ui.archive_conflict_dialog import ArchiveConflictDialog
 from invoice_reader.ui.excel_panel import ExcelPanel
 from invoice_reader.ui.template_editor import TemplateEditor
 
@@ -37,7 +41,10 @@ class MainWindow(ttk.Frame):
         self._settings_repository = SettingsRepository()
         self._approval_repository = ApprovalRepository()
         self._excel_service = ExcelService()
+        self._archive_service = ArchiveService()
         self._excel_path = self._load_excel_path()
+        self._archive_directory = self._load_archive_directory()
+        self._approved_at = ""
         self._current_plmn = ""
         self._current_pdf_path = ""
         self._record: InvoiceRecord | None = None
@@ -57,6 +64,12 @@ class MainWindow(ttk.Frame):
             on_select=self._select_excel,
         )
         self._excel_panel.pack(fill="x", pady=(0, 10))
+        self._archive_panel = ArchivePanel(
+            self,
+            self._archive_directory,
+            on_select=self._select_archive_directory,
+        )
+        self._archive_panel.pack(fill="x", pady=(0, 10))
         self._template_editor = TemplateEditor(
             self,
             self._templates,
@@ -87,6 +100,8 @@ class MainWindow(ttk.Frame):
             on_field_reselection=self._start_field_reselection,
             on_template_save=self._save_template_from_approval,
             on_approved=self._approve_record,
+            on_retry_excel=self._retry_excel_write,
+            on_retry_archive=self._retry_archive,
         )
         self._approval_panel.pack(fill="both", expand=True)
 
@@ -107,6 +122,7 @@ class MainWindow(ttk.Frame):
         self._current_pdf_path = str(service.path)
         self._record = None
         self._current_template = None
+        self._approved_at = ""
         self._approval_panel.clear()
         self._show_existing_approval_notice()
         parser = FilenameParser(self._settings_repository.load_filename_patterns())
@@ -234,38 +250,39 @@ class MainWindow(ttk.Frame):
         self._template_editor.set_status(f"{field_name} 已按当前发票的新框重新提取。")
 
     def _approve_record(self, record: InvoiceRecord) -> None:
-        """Persist approval first, then write the approved row when Excel is selected."""
-        approved_at = datetime.now().astimezone().isoformat(timespec="seconds")
-        self._approval_repository.save(record, approved_at, "")
-        self._template_editor.set_status("当前发票已审批。")
+        """Start the write-then-archive sequence after human approval."""
+        self._approved_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        self._approval_repository.save(record, self._approved_at, "", False)
+        self._approval_panel.set_recovery_actions(False, False)
         if not self._excel_path:
             messagebox.showwarning(
                 "请先选择 Excel",
                 "当前发票已审批。请先新建或选择 Excel 文件后再写入。",
                 parent=self.winfo_toplevel(),
             )
+            self._approval_panel.set_recovery_actions(True, False)
             return
-        self._write_approved_record(record, approved_at)
+        self._write_approved_record(record, self._approved_at)
 
     def _write_approved_record(
         self,
         record: InvoiceRecord,
         approved_at: str,
         overwrite: bool = False,
+        retry: bool = False,
     ) -> None:
         try:
-            self._excel_service.write_record(self._excel_path, record, approved_at, overwrite)
+            existing = self._excel_service.find_record(self._excel_path, record.plmn.value) if retry else None
+            if existing is None:
+                self._excel_service.write_record(self._excel_path, record, approved_at, overwrite)
         except DuplicatePlmnError as error:
             self._confirm_overwrite(record, approved_at, error.existing_values)
         except ExcelLockedError:
-            self._retry_excel_write(record, approved_at, overwrite)
+            self._excel_write_failed(record, approved_at, "Excel 文件被占用，请关闭后重试。")
         except (OSError, ValueError) as error:
-            messagebox.showerror("无法写入 Excel", str(error), parent=self.winfo_toplevel())
+            self._excel_write_failed(record, approved_at, str(error))
         else:
-            record.status = InvoiceStatus.EXCEL_WRITTEN
-            self._approval_repository.save(record, approved_at, self._excel_path)
-            self._template_editor.set_status("已写入 Excel。")
-            messagebox.showinfo("已写入 Excel", "已写入 Excel。", parent=self.winfo_toplevel())
+            self._after_excel_written(record, approved_at)
 
     def _confirm_overwrite(
         self,
@@ -282,13 +299,80 @@ class MainWindow(ttk.Frame):
         ):
             self._write_approved_record(record, approved_at, overwrite=True)
 
-    def _retry_excel_write(self, record: InvoiceRecord, approved_at: str, overwrite: bool) -> None:
-        if messagebox.askretrycancel(
-            "Excel 文件被占用",
-            "Excel 文件被占用，请关闭后重试。",
-            parent=self.winfo_toplevel(),
-        ):
-            self._write_approved_record(record, approved_at, overwrite)
+    def _excel_write_failed(self, record: InvoiceRecord, approved_at: str, reason: str) -> None:
+        self._approval_repository.save(record, approved_at, "", False)
+        self._approval_panel.set_recovery_actions(True, False)
+        self._template_editor.set_status("Excel 写入失败，请关闭文件后重试。")
+        messagebox.showerror("Excel 写入失败", reason, parent=self.winfo_toplevel())
+
+    def _after_excel_written(self, record: InvoiceRecord, approved_at: str) -> None:
+        record.status = InvoiceStatus.EXCEL_WRITTEN
+        self._approval_repository.save(record, approved_at, self._excel_path, True)
+        self._approval_panel.set_recovery_actions(False, False)
+        if not self._archive_directory:
+            self._template_editor.set_status("已写入 Excel；未设置归档目录。")
+            messagebox.showinfo("已写入 Excel", "已写入 Excel。未设置归档目录，PDF 未移动。", parent=self.winfo_toplevel())
+            return
+        self._archive_pdf(record, approved_at)
+
+    def _retry_excel_write(self) -> None:
+        if self._record is None or not self._excel_path:
+            return
+        self._write_approved_record(self._record, self._approved_at, retry=True)
+
+    def _archive_pdf(self, record: InvoiceRecord, approved_at: str) -> None:
+        try:
+            archive_path = self._archive_service.archive(record.file_path, self._archive_directory)
+        except ArchiveConflictError as error:
+            self._resolve_archive_conflict(record, approved_at, error.filename)
+        except ArchiveError as error:
+            self._archive_failed(record, approved_at, str(error))
+        else:
+            self._archive_succeeded(record, approved_at, archive_path)
+
+    def _resolve_archive_conflict(self, record: InvoiceRecord, approved_at: str, filename: str) -> None:
+        action = ArchiveConflictDialog.ask(self, filename)
+        if action == "overwrite":
+            self._archive_with_options(record, approved_at, None, True)
+        elif action == "rename":
+            renamed = simpledialog.askstring("重命名归档文件", "请输入新文件名：", initialvalue=filename, parent=self.winfo_toplevel())
+            if renamed:
+                self._archive_with_options(record, approved_at, renamed.strip(), False)
+            else:
+                self._archive_failed(record, approved_at, "用户取消归档。")
+        else:
+            self._archive_failed(record, approved_at, "用户取消归档。")
+
+    def _archive_with_options(
+        self,
+        record: InvoiceRecord,
+        approved_at: str,
+        filename: str | None,
+        overwrite: bool,
+    ) -> None:
+        try:
+            archive_path = self._archive_service.archive(record.file_path, self._archive_directory, filename, overwrite)
+        except ArchiveError as error:
+            self._archive_failed(record, approved_at, str(error))
+        else:
+            self._archive_succeeded(record, approved_at, archive_path)
+
+    def _archive_succeeded(self, record: InvoiceRecord, approved_at: str, archive_path: str) -> None:
+        record.status = InvoiceStatus.ARCHIVED
+        self._approval_repository.save(record, approved_at, self._excel_path, True, archive_path, True)
+        self._approval_panel.set_recovery_actions(False, False)
+        self._template_editor.set_status(f"已归档到 {archive_path}")
+        messagebox.showinfo("已归档", f"已归档到 {archive_path}", parent=self.winfo_toplevel())
+
+    def _archive_failed(self, record: InvoiceRecord, approved_at: str, reason: str) -> None:
+        self._approval_repository.save(record, approved_at, self._excel_path, True, "", False)
+        self._approval_panel.set_recovery_actions(False, True)
+        self._template_editor.set_status("PDF 归档失败，请手动移动或重试归档。")
+        messagebox.showwarning("PDF 归档失败", f"PDF 归档失败：{reason}", parent=self.winfo_toplevel())
+
+    def _retry_archive(self) -> None:
+        if self._record is not None and self._archive_directory:
+            self._archive_pdf(self._record, self._approved_at)
 
     def _create_monthly_excel(self) -> None:
         excel_path = filedialog.asksaveasfilename(
@@ -330,6 +414,19 @@ class MainWindow(ttk.Frame):
     def _load_excel_path(self) -> str:
         excel_path = self._settings_repository.load_excel_path()
         return excel_path if excel_path and Path(excel_path).is_file() else ""
+
+    def _select_archive_directory(self) -> None:
+        archive_directory = filedialog.askdirectory(
+            title="设置归档目录",
+            parent=self.winfo_toplevel(),
+        )
+        if archive_directory:
+            self._archive_directory = archive_directory
+            self._settings_repository.save_archive_directory(archive_directory)
+            self._archive_panel.set_archive_directory(archive_directory)
+
+    def _load_archive_directory(self) -> str:
+        return self._settings_repository.load_archive_directory()
 
     def _show_existing_approval_notice(self) -> None:
         if self._approval_repository.find_by_pdf_path(self._current_pdf_path) is not None:

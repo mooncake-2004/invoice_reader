@@ -29,6 +29,8 @@ class ApprovalPanel(ttk.LabelFrame):
         on_field_reselection: Callable[[str], None],
         on_template_save: Callable[[], None],
         on_approved: Callable[[InvoiceRecord], None],
+        on_retry_excel: Callable[[], None],
+        on_retry_archive: Callable[[], None],
     ) -> None:
         super().__init__(master, text="人工审批", padding=8)
         self._on_field_focused = on_field_focused
@@ -36,6 +38,8 @@ class ApprovalPanel(ttk.LabelFrame):
         self._on_field_reselection = on_field_reselection
         self._on_template_save = on_template_save
         self._on_approved = on_approved
+        self._on_retry_excel = on_retry_excel
+        self._on_retry_archive = on_retry_archive
         self._record: InvoiceRecord | None = None
         self._refreshing = False
         self._value_variables: dict[str, tk.StringVar] = {}
@@ -44,6 +48,8 @@ class ApprovalPanel(ttk.LabelFrame):
         self._value_entries: dict[str, tk.Entry] = {}
         self._preview = tk.StringVar(value="提取完成后可在此审批字段。")
         self._template_save_button: ttk.Button | None = None
+        self._retry_excel_button: ttk.Button | None = None
+        self._retry_archive_button: ttk.Button | None = None
         self._build()
 
     def show_record(self, record: InvoiceRecord) -> None:
@@ -57,6 +63,12 @@ class ApprovalPanel(ttk.LabelFrame):
         self._refreshing = False
         self._refresh_rows()
         self.set_template_save_action(None)
+        self.set_recovery_actions(False, False)
+
+    def set_recovery_actions(self, can_retry_excel: bool, can_retry_archive: bool) -> None:
+        """Show only the retry action for the incomplete post-approval step."""
+        self._set_button_visible(self._retry_excel_button, can_retry_excel)
+        self._set_button_visible(self._retry_archive_button, can_retry_archive)
 
     def set_template_save_action(self, template_exists: bool | None) -> None:
         """Show the one-stop template action only when there are selected boxes."""
@@ -161,8 +173,22 @@ class ApprovalPanel(ttk.LabelFrame):
             padx=(8, 0),
         )
         self._template_save_button.grid_remove()
-        ttk.Label(self, textvariable=self._preview, wraplength=300).grid(
+        self._retry_excel_button = ttk.Button(self, text="重试写入", command=self._on_retry_excel)
+        self._retry_excel_button.grid(
             row=len(FIELD_NAMES) + 3,
+            column=0,
+            sticky="w",
+        )
+        self._retry_archive_button = ttk.Button(self, text="重试归档", command=self._on_retry_archive)
+        self._retry_archive_button.grid(
+            row=len(FIELD_NAMES) + 3,
+            column=1,
+            sticky="w",
+            padx=(8, 0),
+        )
+        self.set_recovery_actions(False, False)
+        ttk.Label(self, textvariable=self._preview, wraplength=300).grid(
+            row=len(FIELD_NAMES) + 4,
             column=0,
             columnspan=6,
             sticky="w",
@@ -226,3 +252,11 @@ class ApprovalPanel(ttk.LabelFrame):
             else:
                 background = "white"
             self._value_entries[field_name].configure(background=background)
+
+    def _set_button_visible(self, button: ttk.Button | None, visible: bool) -> None:
+        if button is None:
+            return
+        if visible:
+            button.grid()
+        else:
+            button.grid_remove()

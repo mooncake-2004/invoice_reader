@@ -57,6 +57,17 @@ class ExcelService:
         finally:
             workbook.close()
 
+    def find_record(self, excel_path: str, plmn: str) -> tuple[str, ...] | None:
+        """Return the exact PLMN row so a retry does not append it twice."""
+        workbook = load_workbook(excel_path, read_only=True, data_only=False)
+        try:
+            worksheet = workbook.active
+            self._validate_headers(worksheet)
+            row_number = self._find_plmn_row(worksheet, plmn)
+            return None if row_number is None else self._row_values(worksheet, row_number)
+        finally:
+            workbook.close()
+
     def _validate_headers(self, worksheet: object) -> None:
         headers = tuple(worksheet.cell(row=1, column=index).value for index in range(1, 7))
         if headers != EXCEL_HEADERS:

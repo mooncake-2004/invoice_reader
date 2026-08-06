@@ -32,6 +32,16 @@ class SettingsRepository:
         settings["excel_path"] = excel_path
         self._save(settings)
 
+    def load_archive_directory(self) -> str:
+        """Load the last selected PDF archive directory."""
+        return str(self._load().get("archive_directory", ""))
+
+    def save_archive_directory(self, archive_directory: str) -> None:
+        """Save the PDF archive directory without changing other settings."""
+        settings = self._load()
+        settings["archive_directory"] = archive_directory
+        self._save(settings)
+
     def _load(self) -> dict[str, object]:
         if not self._path.exists():
             return {}

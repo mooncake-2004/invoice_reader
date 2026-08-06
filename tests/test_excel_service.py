@@ -63,3 +63,19 @@ def test_appends_then_overwrites_an_exact_plmn_row(tmp_path) -> None:
         EXCEL_HEADERS,
         ("ABCDE", "INV-2002", "321.45", "100", "200", "2026-08-06T11:00:00+08:00"),
     ]
+
+
+def test_finds_an_existing_exact_plmn_row(tmp_path) -> None:
+    excel_path = tmp_path / "2026-08.xlsx"
+    service = ExcelService()
+    service.create_monthly_workbook(str(excel_path))
+    service.write_record(str(excel_path), _record(), "2026-08-06T10:00:00+08:00")
+
+    assert service.find_record(str(excel_path), "ABCDE") == (
+        "ABCDE",
+        "INV-1001",
+        "321.45",
+        "100",
+        "200",
+        "2026-08-06T10:00:00+08:00",
+    )

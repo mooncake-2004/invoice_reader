@@ -16,7 +16,7 @@ def test_saves_and_finds_an_approved_pdf_record(tmp_path) -> None:
     )
     repository = ApprovalRepository(tmp_path / "approval_records.json")
 
-    repository.save(record, "2026-08-06T10:00:00+08:00", "C:/monthly.xlsx")
+    repository.save(record, "2026-08-06T10:00:00+08:00", "C:/monthly.xlsx", True)
 
     assert repository.find_by_pdf_path(str(pdf_path)) == {
         "plmn": "ABCDE",
@@ -27,4 +27,18 @@ def test_saves_and_finds_an_approved_pdf_record(tmp_path) -> None:
         "approved_at": "2026-08-06T10:00:00+08:00",
         "pdf_file_path": str(pdf_path.resolve()),
         "excel_path": "C:/monthly.xlsx",
+        "excel_written": True,
+        "archive_path": "",
+        "archived": False,
     }
+
+
+def test_finds_a_record_again_after_its_pdf_is_archived(tmp_path) -> None:
+    source_path = tmp_path / "source.pdf"
+    archive_path = tmp_path / "archive" / "source.pdf"
+    record = InvoiceRecord(file_path=str(source_path), plmn=ExtractedField(value="ABCDE"))
+    repository = ApprovalRepository(tmp_path / "approval_records.json")
+
+    repository.save(record, "2026-08-06T10:00:00+08:00", "C:/monthly.xlsx", True, str(archive_path), True)
+
+    assert repository.find_by_pdf_path(str(archive_path)) is not None
