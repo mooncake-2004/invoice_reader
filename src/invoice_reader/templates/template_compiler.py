@@ -1,9 +1,12 @@
-"""Compile manual field locations into a new or updated template."""
+"""Compile manual field locations into local and invoice2data templates."""
 
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from invoice_reader.templates.template_models import FIELD_NAMES, InvoiceTemplate, TemplateField
+
+
+_AREA_DPI = 72
 
 
 class TemplateCompiler:
@@ -54,3 +57,43 @@ class TemplateCompiler:
             updated_at=now,
             sample_pdf_hash=sample_pdf_hash,
         )
+
+    def compile_invoice2data_template(
+        self,
+        template: InvoiceTemplate,
+        page_sizes: dict[int, tuple[float, float]],
+    ) -> dict[str, object]:
+        """Convert normalized field boxes to PDFium area extraction rules."""
+        fields = {
+            name: {
+                "parser": "regex",
+                "regex": r"(?s)(.+)",
+                "area": self._compile_area(field, page_sizes[field.page_number]),
+            }
+            for name, field in template.fields.items()
+        }
+        return {
+            "template_name": template.template_id,
+            "issuer": template.plmn,
+            "keywords": [],
+            "exclude_keywords": [],
+            "required_fields": [],
+            "fields": fields,
+        }
+
+    def _compile_area(
+        self,
+        field: TemplateField,
+        page_size: tuple[float, float],
+    ) -> dict[str, float | int]:
+        page_width, page_height = page_size
+        x0, y0, x1, y1 = field.bbox_normalized
+        return {
+            "f": field.page_number,
+            "l": field.page_number,
+            "r": _AREA_DPI,
+            "x": x0 * page_width,
+            "y": y0 * page_height,
+            "W": (x1 - x0) * page_width,
+            "H": (y1 - y0) * page_height,
+        }

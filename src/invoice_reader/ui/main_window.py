@@ -3,6 +3,8 @@
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
+from invoice_reader.application.models import InvoiceRecord
+from invoice_reader.extraction.invoice2data_adapter import Invoice2DataAdapter
 from invoice_reader.infrastructure.defaults import template_defaults
 from invoice_reader.repositories.settings_repository import SettingsRepository
 from invoice_reader.services.pdf_service import PdfService
@@ -25,10 +27,13 @@ class MainWindow(ttk.Frame):
         defaults = template_defaults()
         self._settings_repository = SettingsRepository()
         self._current_plmn = ""
+        self._current_pdf_path = ""
+        self._record: InvoiceRecord | None = None
         self._template_repository = TemplateRepository()
         self._templates = self._template_repository.load_all()
         self._templates_by_id = {template.template_id: template for template in self._templates}
         self._template_compiler = TemplateCompiler(defaults.page_size_tolerance)
+        self._invoice2data_adapter = Invoice2DataAdapter(self._template_compiler)
         self._template_matcher = TemplateMatcher()
 
         FilenameParserPanel(self, self._settings_repository).pack(fill="x", pady=(0, 10))
@@ -72,7 +77,7 @@ class MainWindow(ttk.Frame):
         self._viewer.set_active_field(field_name)
 
     def _show_field_texts(self, texts: dict[str, str]) -> None:
-        """Refresh the panel with text from every selected template field."""
+        """Preview raw text while the user is drawing a new field box."""
         self._text.configure(state="normal")
         self._text.delete("1.0", "end")
         self._text.insert(
@@ -85,8 +90,25 @@ class MainWindow(ttk.Frame):
         )
         self._text.configure(state="disabled")
 
+    def _show_record(self, record: InvoiceRecord) -> None:
+        """Show invoice2data/PDFium field values and their extraction details."""
+        self._text.configure(state="normal")
+        self._text.delete("1.0", "end")
+        self._text.insert(
+            "1.0",
+            "\n".join(
+                f"{FIELD_LABELS[field_name]}: {getattr(record, field_name).value}\n"
+                f"来源: {getattr(record, field_name).source} | "
+                f"置信度: {getattr(record, field_name).confidence:.0%}"
+                for field_name in FIELD_NAMES
+            ),
+        )
+        self._text.configure(state="disabled")
+
     def _match_template(self, service: PdfService) -> None:
         """Parse the PDF filename PLMN and apply its local template directly."""
+        self._current_pdf_path = str(service.path)
+        self._record = None
         self._current_plmn = FilenameParser(
             self._settings_repository.load_filename_patterns()
         ).parse(service.path.name)
@@ -106,9 +128,15 @@ class MainWindow(ttk.Frame):
             self._template_editor.set_status(f"已按 PLMN {self._current_plmn} 自动套用模板。")
 
     def _apply_template(self, template_id: str) -> None:
-        """Draw the selected template's four normalized field locations."""
+        """Draw the template locations and extract its structured field values."""
         template = self._templates_by_id[template_id]
         self._viewer.apply_template_fields(template.fields)
+        self._record = self._invoice2data_adapter.extract(
+            self._current_pdf_path,
+            template,
+            self._current_plmn,
+        )
+        self._show_record(self._record)
         self._template_editor.select_template(template)
         self._template_editor.set_status(f"已应用模板：{template.display_name}")
 
