@@ -97,8 +97,20 @@ class PdfViewer(ttk.Frame):
         overlay = self._overlays.get(field_name)
         if overlay is None:
             return
-        self._canvas.itemconfigure(overlay.rectangle_id, outline="#d83b01", width=3)
+        self._center_overlay(overlay)
+        self._canvas.itemconfigure(overlay.rectangle_id, outline="#d83b01", width=2, fill="")
         self.after(500, lambda: self._set_overlay_outline(overlay))
+
+    def _center_overlay(self, overlay: FieldOverlay) -> None:
+        """Scroll the canvas until an overlay is centered in the viewport."""
+        self._canvas.update_idletasks()
+        x0, y0, x1, y1 = self._canvas.coords(overlay.rectangle_id)
+        center_x = (x0 + x1) / 2
+        center_y = (y0 + y1) / 2
+        scroll_width = self._page_width + self._MARGIN * 2
+        scroll_height = self._page_height + self._MARGIN * 2
+        self._canvas.xview_moveto(max(0.0, min(1.0, (center_x - self._canvas.winfo_width() / 2) / scroll_width)))
+        self._canvas.yview_moveto(max(0.0, min(1.0, (center_y - self._canvas.winfo_height() / 2) / scroll_height)))
 
     def _build_toolbar(self) -> None:
         toolbar = ttk.Frame(self)
@@ -234,7 +246,15 @@ class PdfViewer(ttk.Frame):
     ) -> FieldOverlay:
         overlay = FieldOverlay(
             field_name=field_name,
-            rectangle_id=self._canvas.create_rectangle(x0, y0, x1, y1, outline="#0078d4", width=2),
+            rectangle_id=self._canvas.create_rectangle(
+                x0,
+                y0,
+                x1,
+                y1,
+                outline="#0078d4",
+                fill="",
+                width=2,
+            ),
             label_id=self._canvas.create_text(
                 min(x0, x1) + 4,
                 min(y0, y1) + 4,

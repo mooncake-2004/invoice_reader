@@ -79,7 +79,9 @@ class ApprovalPanel(ttk.LabelFrame):
         ttk.Label(self, text="置信度").grid(row=0, column=3, sticky="w", padx=(8, 0))
 
         for row, field_name in enumerate(FIELD_NAMES, start=1):
-            ttk.Label(self, text=FIELD_LABELS[field_name]).grid(row=row, column=0, sticky="w")
+            field_label = ttk.Label(self, text=FIELD_LABELS[field_name])
+            field_label.grid(row=row, column=0, sticky="w")
+            field_label.bind("<Button-1>", lambda _event, name=field_name: self._on_field_focused(name))
             value = tk.StringVar()
             value.trace_add("write", lambda *_args, name=field_name: self._value_changed(name))
             entry = tk.Entry(self, textvariable=value, relief="solid", borderwidth=1)
@@ -87,8 +89,10 @@ class ApprovalPanel(ttk.LabelFrame):
             entry.bind("<FocusIn>", lambda _event, name=field_name: self._on_field_focused(name))
             source_label = ttk.Label(self)
             source_label.grid(row=row, column=2, sticky="w", padx=(8, 0), pady=(4, 0))
+            source_label.bind("<Button-1>", lambda _event, name=field_name: self._on_field_focused(name))
             confidence_label = ttk.Label(self)
             confidence_label.grid(row=row, column=3, sticky="w", padx=(8, 0), pady=(4, 0))
+            confidence_label.bind("<Button-1>", lambda _event, name=field_name: self._on_field_focused(name))
             ttk.Button(self, text="恢复原值", command=lambda name=field_name: self._restore(name)).grid(
                 row=row,
                 column=4,

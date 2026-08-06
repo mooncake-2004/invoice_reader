@@ -11,9 +11,10 @@ class PlmnResolutionDialog:
     def ask(cls, parent: tk.Misc) -> str | None:
         """Return the selected resolution action, or None when cancelled."""
         choice: str | None = None
-        dialog = tk.Toplevel(parent.winfo_toplevel())
+        main_window = parent.winfo_toplevel()
+        dialog = tk.Toplevel(main_window)
         dialog.title("无法解析 PLMN")
-        dialog.transient(parent.winfo_toplevel())
+        dialog.transient(main_window)
         dialog.resizable(False, False)
 
         frame = ttk.Frame(dialog, padding=16)
@@ -34,8 +35,12 @@ class PlmnResolutionDialog:
             command=lambda: select("manual"),
         ).pack(side="left", padx=(8, 0))
 
+        dialog.update_idletasks()
+        x = main_window.winfo_rootx() + (main_window.winfo_width() - dialog.winfo_width()) // 2
+        y = main_window.winfo_rooty() + (main_window.winfo_height() - dialog.winfo_height()) // 2
+        dialog.geometry(f"+{max(x, 0)}+{max(y, 0)}")
         dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
         dialog.bind("<Escape>", lambda _event: dialog.destroy())
         dialog.grab_set()
-        parent.wait_window(dialog)
+        main_window.wait_window(dialog)
         return choice
