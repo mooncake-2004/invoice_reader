@@ -2,6 +2,8 @@
 
 from datetime import datetime
 from pathlib import Path
+from queue import Empty, Queue
+from threading import Thread
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
@@ -15,6 +17,9 @@ from invoice_reader.extraction.invoice2data_adapter import Invoice2DataAdapter
 from invoice_reader.infrastructure.defaults import template_defaults
 from invoice_reader.repositories.approval_repository import ApprovalRepository
 from invoice_reader.repositories.settings_repository import SettingsRepository
+from invoice_reader.queue.queue_models import BatchQueue, QueueItem, QueueStatus
+from invoice_reader.queue.queue_repository import QueueRepository
+from invoice_reader.queue.queue_scanner import QueueScanner
 from invoice_reader.services.pdf_service import PdfService
 from invoice_reader.services.filename_parser import FilenameParser
 from invoice_reader.templates.template_compiler import TemplateCompiler
@@ -29,6 +34,8 @@ from invoice_reader.ui.archive_panel import ArchivePanel
 from invoice_reader.ui.archive_conflict_dialog import ArchiveConflictDialog
 from invoice_reader.ui.excel_panel import ExcelPanel
 from invoice_reader.ui.template_editor import TemplateEditor
+from invoice_reader.ui.batch_queue_panel import BatchQueuePanel
+from invoice_reader.ui.collapsible_panel import CollapsiblePanel
 
 
 class MainWindow(ttk.Frame):
@@ -42,6 +49,11 @@ class MainWindow(ttk.Frame):
         self._approval_repository = ApprovalRepository()
         self._excel_service = ExcelService()
         self._archive_service = ArchiveService()
+        self._queue_repository = QueueRepository()
+        self._queue_scanner = QueueScanner()
+        self._batch_queue = BatchQueue()
+        self._scan_generation = 0
+        self._scan_results: Queue[tuple[int, str, list[str] | None, OSError | None]] = Queue()
         self._excel_path = self._load_excel_path()
         self._archive_directory = self._load_archive_directory()
         self._approved_at = ""
@@ -56,33 +68,56 @@ class MainWindow(ttk.Frame):
         self._invoice2data_adapter = Invoice2DataAdapter(self._template_compiler)
         self._template_matcher = TemplateMatcher()
 
-        FilenameParserPanel(self, self._settings_repository).pack(fill="x", pady=(0, 10))
+        settings = ttk.Frame(self)
+        settings.pack(fill="x", pady=(0, 10))
+        self._plmn_section = CollapsiblePanel(settings, "PLMN 文件名解析", "PLMN: 未解析")
+        self._plmn_section.pack(fill="x")
+        self._filename_parser_panel = FilenameParserPanel(self._plmn_section.content, self._settings_repository)
+        self._filename_parser_panel.configure(text="")
+        self._filename_parser_panel.pack(fill="x")
+        self._excel_section = CollapsiblePanel(settings, "Excel", self._excel_summary())
+        self._excel_section.pack(fill="x")
         self._excel_panel = ExcelPanel(
-            self,
+            self._excel_section.content,
             self._excel_path,
             on_create=self._create_monthly_excel,
             on_select=self._select_excel,
         )
-        self._excel_panel.pack(fill="x", pady=(0, 10))
+        self._excel_panel.configure(text="")
+        self._excel_panel.pack(fill="x")
+        self._archive_section = CollapsiblePanel(settings, "归档", self._archive_summary())
+        self._archive_section.pack(fill="x")
         self._archive_panel = ArchivePanel(
-            self,
+            self._archive_section.content,
             self._archive_directory,
             on_select=self._select_archive_directory,
         )
-        self._archive_panel.pack(fill="x", pady=(0, 10))
+        self._archive_panel.configure(text="")
+        self._archive_panel.pack(fill="x")
+        self._template_section = CollapsiblePanel(settings, "模板", "无模板")
+        self._template_section.pack(fill="x")
         self._template_editor = TemplateEditor(
-            self,
+            self._template_section.content,
             self._templates,
             on_field_selected=self._set_active_field,
             on_template_applied=self._apply_template,
             on_template_saved=self._save_template,
             on_template_deleted=self._delete_template,
         )
-        self._template_editor.pack(fill="x", pady=(0, 10))
+        self._template_editor.configure(text="")
+        self._template_editor.pack(fill="x")
 
         content = ttk.PanedWindow(self, orient="horizontal")
         content.pack(fill="both", expand=True)
 
+        self._queue_panel = BatchQueuePanel(
+            content,
+            on_select_folder=self._select_batch_directory,
+            on_rescan=self._rescan_batch_directory,
+            on_item_selected=self._open_queue_item,
+            on_skip_current=self._skip_current_queue_item,
+        )
+        content.add(self._queue_panel, weight=1)
         self._viewer = PdfViewer(
             content,
             on_fields_changed=self._show_field_texts,
@@ -105,6 +140,89 @@ class MainWindow(ttk.Frame):
         )
         self._approval_panel.pack(fill="both", expand=True)
 
+    def _excel_summary(self) -> str:
+        return Path(self._excel_path).name if self._excel_path else "未选择 Excel"
+
+    def _archive_summary(self) -> str:
+        return Path(self._archive_directory).name if self._archive_directory else "未设置目录"
+
+    def _select_batch_directory(self) -> None:
+        directory = filedialog.askdirectory(title="选择批量处理文件夹", parent=self.winfo_toplevel())
+        if directory:
+            self._start_batch_scan(directory)
+
+    def _rescan_batch_directory(self) -> None:
+        if self._batch_queue.directory:
+            self._start_batch_scan(self._batch_queue.directory)
+
+    def _start_batch_scan(self, directory: str) -> None:
+        self._scan_generation += 1
+        generation = self._scan_generation
+        self._queue_panel.set_scanning()
+        Thread(target=self._scan_directory, args=(generation, directory), daemon=True).start()
+        self.after(50, lambda: self._poll_scan_result(generation))
+
+    def _scan_directory(self, generation: int, directory: str) -> None:
+        try:
+            self._scan_results.put((generation, directory, self._queue_scanner.scan(directory), None))
+        except OSError as error:
+            self._scan_results.put((generation, directory, None, error))
+
+    def _poll_scan_result(self, generation: int) -> None:
+        if generation != self._scan_generation:
+            return
+        try:
+            result_generation, directory, paths, error = self._scan_results.get_nowait()
+        except Empty:
+            self.after(50, lambda: self._poll_scan_result(generation))
+            return
+        if result_generation != generation:
+            self.after(0, lambda: self._poll_scan_result(generation))
+            return
+        if error is not None:
+            messagebox.showerror("无法扫描文件夹", str(error), parent=self.winfo_toplevel())
+            return
+        self._finish_batch_scan(directory, paths or [])
+
+    def _finish_batch_scan(self, directory: str, paths: list[str]) -> None:
+        saved_statuses = self._queue_repository.load_statuses(directory)
+        self._batch_queue = BatchQueue(directory)
+        self._batch_queue.replace_paths(paths, saved_statuses)
+        self._queue_repository.save(self._batch_queue)
+        self._queue_panel.set_queue(self._batch_queue)
+
+    def _open_queue_item(self, file_path: str) -> None:
+        item = self._batch_queue.get(file_path)
+        if item is None:
+            return
+        self._load_queue_item(item, item.status != QueueStatus.COMPLETED)
+
+    def _load_queue_item(self, item: QueueItem, mark_processing: bool) -> None:
+        if mark_processing:
+            self._set_queue_status(item.file_path, QueueStatus.PROCESSING)
+        self._queue_panel.set_current(item.file_path)
+        self._viewer.open_pdf(item.file_path)
+
+    def _skip_current_queue_item(self) -> None:
+        if self._batch_queue.get(self._current_pdf_path) is None:
+            return
+        self._set_queue_status(self._current_pdf_path, QueueStatus.SKIPPED)
+        self._viewer.close_current_pdf()
+        self._load_next_pending_item()
+
+    def _load_next_pending_item(self) -> None:
+        item = self._batch_queue.next_pending()
+        if item is not None:
+            self._load_queue_item(item, True)
+
+    def _set_queue_status(self, file_path: str, status: QueueStatus) -> None:
+        item = self._batch_queue.get(file_path)
+        if item is None:
+            return
+        updated_item = self._batch_queue.set_status(file_path, status)
+        self._queue_repository.save(self._batch_queue)
+        self._queue_panel.update_item(updated_item)
+
     def _set_active_field(self, field_name: str) -> None:
         """Route the template editor's field selection to the PDF viewer."""
         self._viewer.set_active_field(field_name)
@@ -124,16 +242,25 @@ class MainWindow(ttk.Frame):
         self._current_template = None
         self._approved_at = ""
         self._approval_panel.clear()
+        queued_item = self._batch_queue.get(self._current_pdf_path)
+        if queued_item is not None and queued_item.status != QueueStatus.COMPLETED:
+            self._set_queue_status(self._current_pdf_path, QueueStatus.PROCESSING)
+            self._queue_panel.set_current(self._current_pdf_path)
         self._show_existing_approval_notice()
         parser = FilenameParser(self._settings_repository.load_filename_patterns())
         self._current_plmn = parser.parse(service.path.name)
         if not self._current_plmn:
             self._current_plmn = self._resolve_unparsed_plmn(service, parser)
+        self._plmn_section.set_summary(f"PLMN: {self._current_plmn or '未解析'}")
         if not self._current_plmn:
+            self._template_section.set_summary("无模板")
+            self._set_queue_status(self._current_pdf_path, QueueStatus.NO_TEMPLATE)
             self._template_editor.set_status("文件名未解析出 PLMN：请选择已有模板，或先配置文件名模式后新建。")
             return
         template = self._template_matcher.match(self._templates, self._current_plmn)
         if template is None:
+            self._template_section.set_summary("无模板")
+            self._set_queue_status(self._current_pdf_path, QueueStatus.NO_TEMPLATE)
             self._record = self._empty_template_record()
             self._show_record(self._record)
             self._refresh_template_save_action()
@@ -141,7 +268,8 @@ class MainWindow(ttk.Frame):
                 f"PLMN {self._current_plmn} 没有本机模板：请框选四个字段后新建。"
             )
             return
-        self._apply_template(template.template_id)
+        if not self._apply_template(template.template_id):
+            return
         if self._template_matcher.page_size_differs(template, service.page_size(0)):
             self._template_editor.set_status("版式可能变了，请核对字段位置。")
         else:
@@ -196,20 +324,38 @@ class MainWindow(ttk.Frame):
                 parent=self.winfo_toplevel(),
             )
 
-    def _apply_template(self, template_id: str) -> None:
+    def _apply_template(self, template_id: str) -> bool:
         """Draw the template locations and extract its structured field values."""
         template = self._templates_by_id[template_id]
         self._current_template = template
         self._viewer.apply_template_fields(template.fields)
-        self._record = self._invoice2data_adapter.extract(
-            self._current_pdf_path,
-            template,
-            self._current_plmn,
-        )
+        try:
+            self._record = self._invoice2data_adapter.extract(
+                self._current_pdf_path,
+                template,
+                self._current_plmn,
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            self._set_queue_status(self._current_pdf_path, QueueStatus.EXTRACTION_FAILED)
+            self._template_editor.set_status(f"提取失败：{error}")
+            self._template_section.set_summary(template.display_name)
+            return False
         self._show_record(self._record)
         self._refresh_template_save_action()
         self._template_editor.select_template(template)
+        self._template_section.set_summary(template.display_name)
+        if self._template_fields_are_empty(template):
+            self._set_queue_status(self._current_pdf_path, QueueStatus.EXTRACTION_FAILED)
+            self._template_editor.set_status("提取失败：模板字段均为空。")
+            return False
         self._template_editor.set_status(f"已应用模板：{template.display_name}")
+        return True
+
+    def _template_fields_are_empty(self, template: InvoiceTemplate) -> bool:
+        return bool(template.fields) and all(
+            not getattr(self._record, field_name).value
+            for field_name in template.fields
+        )
 
     def _reextract(self) -> None:
         """Run PDFium extraction again using the current template boxes."""
@@ -364,6 +510,8 @@ class MainWindow(ttk.Frame):
         self._approval_panel.set_recovery_actions(False, False)
         self._template_editor.set_status(f"已归档到 {archive_path}")
         messagebox.showinfo("已归档", f"已归档到 {archive_path}", parent=self.winfo_toplevel())
+        self._set_queue_status(self._current_pdf_path, QueueStatus.COMPLETED)
+        self._load_next_pending_item()
 
     def _archive_failed(self, record: InvoiceRecord, approved_at: str, reason: str) -> None:
         self._approval_repository.save(record, approved_at, self._excel_path, True, "", False)
@@ -411,6 +559,7 @@ class MainWindow(ttk.Frame):
         self._excel_path = excel_path
         self._settings_repository.save_excel_path(excel_path)
         self._excel_panel.set_excel_path(excel_path)
+        self._excel_section.set_summary(self._excel_summary())
 
     def _load_excel_path(self) -> str:
         excel_path = self._settings_repository.load_excel_path()
@@ -425,6 +574,7 @@ class MainWindow(ttk.Frame):
             self._archive_directory = archive_directory
             self._settings_repository.save_archive_directory(archive_directory)
             self._archive_panel.set_archive_directory(archive_directory)
+            self._archive_section.set_summary(self._archive_summary())
 
     def _load_archive_directory(self) -> str:
         return self._settings_repository.load_archive_directory()
@@ -530,5 +680,6 @@ class MainWindow(ttk.Frame):
         self._templates = [current for current in self._templates if current.template_id != template_id]
         self._template_editor.set_templates(self._templates)
         self._template_editor.clear_template()
+        self._template_section.set_summary("无模板")
         self._template_editor.set_status(f"已删除本机模板：{template.display_name}")
 

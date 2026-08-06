@@ -185,11 +185,18 @@ class PdfViewer(ttk.Frame):
         if not path:
             return
 
+        self.open_pdf(path)
+
+    def open_pdf(self, path: str) -> bool:
+        """Open one caller-supplied PDF path for queue-driven processing."""
+        if not path:
+            return False
+
         try:
             self._service.open(path)
         except (fitz.FileDataError, OSError, RuntimeError) as error:
             messagebox.showerror("无法打开 PDF", str(error), parent=self.winfo_toplevel())
-            return
+            return False
 
         self._page_index = 0
         self._zoom = 1.0
@@ -200,6 +207,7 @@ class PdfViewer(ttk.Frame):
         self._render_page()
         self._notify_fields_changed()
         self._on_pdf_opened(self._service)
+        return True
 
     def _change_page(self, direction: int, show_bottom: bool = False) -> None:
         new_index = self._page_index + direction

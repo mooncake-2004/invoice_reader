@@ -20,6 +20,11 @@ def approval_records_path() -> Path:
     return Path(os.environ["LOCALAPPDATA"]) / "InvoiceReader" / "approval_records.json"
 
 
+def batch_queue_path() -> Path:
+    """Return the local state file for the currently selected batch PDF queue."""
+    return Path(os.environ["LOCALAPPDATA"]) / "InvoiceReader" / "batch_queue.json"
+
+
 def resource_path(relative_path: str) -> Path:
     """Return a bundled resource path for source runs and PyInstaller builds."""
     base_path = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[3]))
