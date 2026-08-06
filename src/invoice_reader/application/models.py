@@ -12,6 +12,7 @@ class FieldSource(StrEnum):
     TEXT = "text"
     OCR = "ocr"
     MANUAL = "manual"
+    MANUAL_SELECTION = "manual_selection"
 
 
 class ValidationStatus(StrEnum):

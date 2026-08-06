@@ -1,5 +1,7 @@
 """Tests for PLMN stored in a newly compiled template."""
 
+import pytest
+
 from invoice_reader.templates.template_compiler import TemplateCompiler
 from invoice_reader.templates.template_models import FIELD_NAMES, InvoiceTemplate, create_template_field
 
@@ -22,6 +24,37 @@ def test_records_plmn_in_template() -> None:
     )
 
     assert template.plmn == "ABCDE"
+
+
+def test_allows_a_template_with_only_one_selected_field() -> None:
+    fields = {"invoice_no": create_template_field("invoice_no", 1, (0.1, 0.2, 0.3, 0.4))}
+
+    template = TemplateCompiler(0.02).compile(
+        "Example",
+        "Company",
+        "ABCDE",
+        [],
+        [],
+        fields,
+        (595.0, 842.0),
+        "sample-hash",
+    )
+
+    assert set(template.fields) == {"invoice_no"}
+
+
+def test_rejects_a_template_with_no_selected_fields() -> None:
+    with pytest.raises(ValueError):
+        TemplateCompiler(0.02).compile(
+            "Example",
+            "Company",
+            "ABCDE",
+            [],
+            [],
+            {},
+            (595.0, 842.0),
+            "sample-hash",
+        )
 
 
 def test_compiles_normalized_box_to_pdfium_area() -> None:

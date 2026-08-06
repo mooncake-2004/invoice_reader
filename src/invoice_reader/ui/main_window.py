@@ -3,7 +3,8 @@
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
-from invoice_reader.application.models import InvoiceRecord
+from invoice_reader.application.job_state import InvoiceStatus
+from invoice_reader.application.models import FieldSource, InvoiceRecord
 from invoice_reader.extraction.invoice2data_adapter import Invoice2DataAdapter
 from invoice_reader.infrastructure.defaults import template_defaults
 from invoice_reader.repositories.settings_repository import SettingsRepository
@@ -11,7 +12,7 @@ from invoice_reader.services.pdf_service import PdfService
 from invoice_reader.services.filename_parser import FilenameParser
 from invoice_reader.templates.template_compiler import TemplateCompiler
 from invoice_reader.templates.template_matcher import TemplateMatcher
-from invoice_reader.templates.template_models import InvoiceTemplate
+from invoice_reader.templates.template_models import InvoiceTemplate, TemplateField
 from invoice_reader.templates.template_repository import TemplateRepository
 from invoice_reader.ui.filename_parser_panel import FilenameParserPanel
 from invoice_reader.ui.pdf_viewer import PdfViewer
@@ -57,6 +58,7 @@ class MainWindow(ttk.Frame):
             content,
             on_fields_changed=self._show_field_texts,
             on_pdf_opened=self._match_template,
+            on_field_reselected=self._field_reselected,
         )
         content.add(self._viewer, weight=4)
 
@@ -66,6 +68,7 @@ class MainWindow(ttk.Frame):
             side_panel,
             on_field_focused=self._viewer.highlight_field,
             on_reextract=self._reextract,
+            on_field_reselection=self._start_field_reselection,
             on_approved=self._approve_record,
         )
         self._approval_panel.pack(fill="both", expand=True)
@@ -174,7 +177,6 @@ class MainWindow(ttk.Frame):
         """Run PDFium extraction again using the current template boxes."""
         if self._current_template is None:
             return
-        self._current_template.fields = self._viewer.field_locations()
         self._record = self._invoice2data_adapter.extract(
             self._current_pdf_path,
             self._current_template,
@@ -182,6 +184,30 @@ class MainWindow(ttk.Frame):
         )
         self._show_record(self._record)
         self._template_editor.set_status("已重新提取，请审批字段。")
+
+    def _start_field_reselection(self, field_name: str) -> None:
+        """Make the next PDF box replace one field on this invoice only."""
+        if self._record is None:
+            return
+        self._viewer.start_field_reselection(field_name)
+        self._template_editor.set_status(f"请在 PDF 上重新框选 {field_name}。")
+
+    def _field_reselected(self, field_name: str, field: TemplateField) -> None:
+        """Extract a one-off current-invoice field from a newly drawn box."""
+        if self._record is None or self._current_template is None:
+            return
+        extracted_field = self._invoice2data_adapter.extract_field(
+            self._current_pdf_path,
+            self._current_template,
+            field_name,
+            field,
+        )
+        extracted_field.source = FieldSource.MANUAL_SELECTION
+        setattr(self._record, field_name, extracted_field)
+        self._record.status = InvoiceStatus.EXTRACTED
+        self._show_record(self._record)
+        self._viewer.highlight_field(field_name)
+        self._template_editor.set_status(f"{field_name} 已按当前发票的新框重新提取。")
 
     def _approve_record(self, _record: InvoiceRecord) -> None:
         """Reflect the completed approval state in the existing status area."""

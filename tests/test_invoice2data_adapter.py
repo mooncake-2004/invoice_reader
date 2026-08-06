@@ -82,3 +82,21 @@ def test_marks_an_empty_field_without_failing(tmp_path) -> None:
     assert record.tap_end.value == ""
     assert record.tap_end.validation_status == ValidationStatus.INVALID
     assert record.tap_end.confidence == 0.0
+
+
+def test_extracts_one_current_invoice_field_without_changing_template(tmp_path) -> None:
+    pdf_path = tmp_path / "ABCDE_invoice.pdf"
+    _pdf(str(pdf_path))
+    template = _template()
+    replacement = create_template_field("tap_end", 1, (0.05, 0.48, 0.45, 0.60))
+
+    field = Invoice2DataAdapter(TemplateCompiler(0.02)).extract_field(
+        str(pdf_path),
+        template,
+        "tap_end",
+        replacement,
+    )
+
+    assert field.value == "200"
+    assert field.source == FieldSource.TEXT
+    assert template.fields["tap_end"].bbox_normalized == (0.05, 0.50, 0.45, 0.60)

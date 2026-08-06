@@ -14,6 +14,7 @@ _SOURCE_LABELS = {
     FieldSource.TEXT: "文字提取",
     FieldSource.OCR: "OCR",
     FieldSource.MANUAL: "人工修改",
+    FieldSource.MANUAL_SELECTION: "人工框选",
 }
 
 
@@ -25,11 +26,13 @@ class ApprovalPanel(ttk.LabelFrame):
         master: tk.Misc,
         on_field_focused: Callable[[str], None],
         on_reextract: Callable[[], None],
+        on_field_reselection: Callable[[str], None],
         on_approved: Callable[[InvoiceRecord], None],
     ) -> None:
         super().__init__(master, text="人工审批", padding=8)
         self._on_field_focused = on_field_focused
         self._on_reextract = on_reextract
+        self._on_field_reselection = on_field_reselection
         self._on_approved = on_approved
         self._record: InvoiceRecord | None = None
         self._refreshing = False
@@ -100,6 +103,17 @@ class ApprovalPanel(ttk.LabelFrame):
                 padx=(8, 0),
                 pady=(4, 0),
             )
+            ttk.Button(
+                self,
+                text="重新框选",
+                command=lambda name=field_name: self._on_field_reselection(name),
+            ).grid(
+                row=row,
+                column=5,
+                sticky="w",
+                padx=(8, 0),
+                pady=(4, 0),
+            )
             self._value_variables[field_name] = value
             self._source_labels[field_name] = source_label
             self._confidence_labels[field_name] = confidence_label
@@ -108,7 +122,7 @@ class ApprovalPanel(ttk.LabelFrame):
         ttk.Separator(self, orient="horizontal").grid(
             row=len(FIELD_NAMES) + 1,
             column=0,
-            columnspan=5,
+            columnspan=6,
             sticky="ew",
             pady=8,
         )
@@ -126,7 +140,7 @@ class ApprovalPanel(ttk.LabelFrame):
         ttk.Label(self, textvariable=self._preview, wraplength=300).grid(
             row=len(FIELD_NAMES) + 3,
             column=0,
-            columnspan=5,
+            columnspan=6,
             sticky="w",
             pady=(8, 0),
         )
@@ -181,10 +195,10 @@ class ApprovalPanel(ttk.LabelFrame):
             self._source_labels[field_name].configure(text=_SOURCE_LABELS[field.source])
             confidence = field.confidence or 0.0
             self._confidence_labels[field_name].configure(text=f"{confidence:.0%}")
-            if field.source == FieldSource.MANUAL:
-                background = "#fff2cc"
-            elif not field.value or confidence < _CONFIDENCE_THRESHOLD:
+            if not field.value or confidence < _CONFIDENCE_THRESHOLD:
                 background = "#fce4d6"
+            elif field.source in (FieldSource.MANUAL, FieldSource.MANUAL_SELECTION):
+                background = "#fff2cc"
             else:
                 background = "white"
             self._value_entries[field_name].configure(background=background)

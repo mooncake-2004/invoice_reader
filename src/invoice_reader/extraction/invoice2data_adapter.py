@@ -1,5 +1,7 @@
 """Extract template field values through invoice2data's PDFium backend."""
 
+from dataclasses import replace
+
 import fitz
 from invoice2data import extract_data
 from invoice2data.extract.invoice_template import InvoiceTemplate as Invoice2DataTemplate
@@ -13,7 +15,7 @@ from invoice_reader.application.models import (
 )
 from invoice_reader.application.job_state import InvoiceStatus
 from invoice_reader.templates.template_compiler import TemplateCompiler
-from invoice_reader.templates.template_models import InvoiceTemplate
+from invoice_reader.templates.template_models import InvoiceTemplate, TemplateField
 
 
 class Invoice2DataAdapter:
@@ -24,16 +26,7 @@ class Invoice2DataAdapter:
 
     def extract(self, pdf_path: str, template: InvoiceTemplate, plmn: str) -> InvoiceRecord:
         """Extract the four selected fields from one electronic PDF."""
-        page_sizes = self._page_sizes(pdf_path, template)
-        compiled_template = Invoice2DataTemplate(
-            self._template_compiler.compile_invoice2data_template(template, page_sizes)
-        )
-        result = extract_data(
-            pdf_path,
-            templates=[compiled_template],
-            input_module=pdfium,
-            raise_on_error=False,
-        )
+        result = self._extract_result(pdf_path, template)
         return InvoiceRecord(
             file_path=pdf_path,
             plmn=self._plmn_field(plmn),
@@ -42,6 +35,29 @@ class Invoice2DataAdapter:
             tap_start=self._result_field(result, "tap_start"),
             tap_end=self._result_field(result, "tap_end"),
             status=InvoiceStatus.EXTRACTED,
+        )
+
+    def extract_field(
+        self,
+        pdf_path: str,
+        template: InvoiceTemplate,
+        field_name: str,
+        field: TemplateField,
+    ) -> ExtractedField:
+        """Extract one current-invoice field without modifying the template."""
+        result = self._extract_result(pdf_path, replace(template, fields={field_name: field}))
+        return self._result_field(result, field_name)
+
+    def _extract_result(self, pdf_path: str, template: InvoiceTemplate) -> dict[str, object]:
+        page_sizes = self._page_sizes(pdf_path, template)
+        compiled_template = Invoice2DataTemplate(
+            self._template_compiler.compile_invoice2data_template(template, page_sizes)
+        )
+        return extract_data(
+            pdf_path,
+            templates=[compiled_template],
+            input_module=pdfium,
+            raise_on_error=False,
         )
 
     def _page_sizes(

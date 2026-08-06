@@ -34,8 +34,10 @@ class TemplateCompiler:
             raise ValueError("请填写公司名。")
         if not plmn:
             raise ValueError("文件名未解析出 PLMN，不能保存模板。")
-        if set(fields) != set(FIELD_NAMES):
-            raise ValueError("请框选四个字段后再保存模板。")
+        if not fields:
+            raise ValueError("请至少框选一个字段后再保存模板。")
+        if not set(fields).issubset(FIELD_NAMES):
+            raise ValueError("模板包含未知字段。")
 
         now = datetime.now(timezone.utc).isoformat()
         return InvoiceTemplate(

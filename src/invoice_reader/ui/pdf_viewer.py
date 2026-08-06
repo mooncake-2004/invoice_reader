@@ -39,11 +39,13 @@ class PdfViewer(ttk.Frame):
         master: tk.Misc,
         on_fields_changed: Callable[[dict[str, str]], None],
         on_pdf_opened: Callable[[PdfService], None],
+        on_field_reselected: Callable[[str, TemplateField], None],
     ) -> None:
         super().__init__(master)
         self._service = PdfService()
         self._on_fields_changed = on_fields_changed
         self._on_pdf_opened = on_pdf_opened
+        self._on_field_reselected = on_field_reselected
         self._page_index = 0
         self._zoom = 1.0
         self._page_x = self._MARGIN
@@ -52,6 +54,7 @@ class PdfViewer(ttk.Frame):
         self._page_height = 0
         self._image: ImageTk.PhotoImage | None = None
         self._active_field = FIELD_NAMES[0]
+        self._one_time_field: str | None = None
         self._selected_field: str | None = None
         self._drawing_overlay: FieldOverlay | None = None
         self._overlays: dict[str, FieldOverlay] = {}
@@ -65,6 +68,11 @@ class PdfViewer(ttk.Frame):
     def set_active_field(self, field_name: str) -> None:
         """Choose which of the four fields the next drag will replace."""
         self._active_field = field_name
+
+    def start_field_reselection(self, field_name: str) -> None:
+        """Make the next completed box a current-invoice field replacement."""
+        self._active_field = field_name
+        self._one_time_field = field_name
 
     def field_locations(self) -> dict[str, TemplateField]:
         """Return the current four field locations for template compilation."""
@@ -83,6 +91,7 @@ class PdfViewer(ttk.Frame):
         self._field_locations = dict(fields)
         self._field_texts.clear()
         self._selected_field = None
+        self._one_time_field = None
         if self._service.page_count:
             self._render_page()
 
@@ -171,6 +180,7 @@ class PdfViewer(ttk.Frame):
         self._field_locations.clear()
         self._field_texts.clear()
         self._selected_field = None
+        self._one_time_field = None
         self._render_page()
         self._notify_fields_changed()
         self._on_pdf_opened(self._service)
@@ -273,6 +283,13 @@ class PdfViewer(ttk.Frame):
             return
         self._canvas.focus_set()
         point = self._canvas_point(event)
+        if self._one_time_field is not None:
+            self._remove_field(self._one_time_field)
+            self._selected_field = self._one_time_field
+            self._drawing_overlay = self._create_overlay(self._one_time_field, *point, *point)
+            self._field_texts[self._one_time_field] = ""
+            self._notify_fields_changed()
+            return
         selected_field = self._field_at(point)
         if selected_field is not None:
             self._drawing_overlay = None
@@ -308,12 +325,16 @@ class PdfViewer(ttk.Frame):
             self._notify_fields_changed()
             return
         self._cancel_scheduled_text_update()
-        self._field_locations[overlay.field_name] = create_template_field(
+        field = create_template_field(
             overlay.field_name,
             self._page_index + 1,
             bbox_normalized,
         )
+        self._field_locations[overlay.field_name] = field
         self._update_field_text(overlay)
+        if self._one_time_field == overlay.field_name:
+            self._one_time_field = None
+            self._on_field_reselected(overlay.field_name, field)
 
     def _schedule_selection_text_update(self) -> None:
         if self._selection_after_id is None:
