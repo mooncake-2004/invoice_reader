@@ -475,10 +475,22 @@ class MainWindow(ttk.Frame):
             field_name,
             field,
         )
+        log_reselection(
+            "reselect extracted: sid=%s, field=%s, value=%r",
+            session_id,
+            field_name,
+            extracted_field.value,
+        )
         extracted_field.source = FieldSource.MANUAL_SELECTION
         setattr(self._record, field_name, extracted_field)
         self._record.status = InvoiceStatus.EXTRACTED
         self._show_record(self._record)
+        log_reselection(
+            "reselect applied: sid=%s, field=%s, value=%r",
+            session_id,
+            field_name,
+            getattr(self._record, field_name).value,
+        )
         self._refresh_template_save_action()
         self._viewer.highlight_field(field_name)
         self._template_editor.set_status(f"{field_name} 已按当前发票的新框重新提取。")
