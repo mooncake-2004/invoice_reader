@@ -26,13 +26,6 @@ class ApprovalRepository:
             None,
         )
 
-    def find_completed_by_pdf_path(self, pdf_path: str) -> dict[str, object] | None:
-        """Return a record only after Excel writing and PDF archiving both succeeded."""
-        record = self.find_by_pdf_path(pdf_path)
-        if record is None or not record.get("excel_written") or not record.get("archived"):
-            return None
-        return record
-
     def save(
         self,
         record: InvoiceRecord,

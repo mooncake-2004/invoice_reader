@@ -33,6 +33,7 @@ class QueueItem:
     file_path: str
     status: QueueStatus = QueueStatus.PENDING
     archive_path: str = ""
+    plmn: str = ""
 
     @property
     def filename(self) -> str:
@@ -66,6 +67,7 @@ class BatchQueue:
                 path,
                 saved_items.get(path, QueueItem(path)).status,
                 saved_items.get(path, QueueItem(path)).archive_path,
+                saved_items.get(path, QueueItem(path)).plmn,
             )
             for path in set(paths) | retained_paths
         }
@@ -81,6 +83,29 @@ class BatchQueue:
         item = self._items[file_path]
         item.archive_path = archive_path
         return item
+
+    def set_plmn(self, file_path: str, plmn: str) -> QueueItem:
+        """Associate the queue identity with its parsed or manually supplied PLMN."""
+        item = self._items[file_path]
+        item.plmn = plmn
+        return item
+
+    def reconcile_completed(self, completed_plmns: set[str]) -> list[QueueItem]:
+        """Make completed status reflect only PLMNs found in the current Excel file."""
+        changed_items: list[QueueItem] = []
+        for item in self._items.values():
+            target_status = self._reconciled_status(item, completed_plmns)
+            if target_status != item.status:
+                item.status = target_status
+                changed_items.append(item)
+        return changed_items
+
+    def _reconciled_status(self, item: QueueItem, completed_plmns: set[str]) -> QueueStatus:
+        if item.plmn and item.plmn in completed_plmns:
+            return QueueStatus.COMPLETED
+        if item.status == QueueStatus.COMPLETED:
+            return QueueStatus.PENDING
+        return item.status
 
     def get(self, file_path: str) -> QueueItem | None:
         """Return one queued item by its absolute path."""

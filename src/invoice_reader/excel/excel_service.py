@@ -71,6 +71,20 @@ class ExcelService:
         finally:
             workbook.close()
 
+    def read_plmns(self, excel_path: str) -> set[str]:
+        """Return all non-empty PLMN identifiers in the active worksheet."""
+        workbook = load_workbook(excel_path, read_only=True, data_only=False)
+        try:
+            worksheet = workbook.active
+            self._validate_headers(worksheet)
+            return {
+                str(worksheet.cell(row=row_number, column=1).value).strip()
+                for row_number in range(2, worksheet.max_row + 1)
+                if worksheet.cell(row=row_number, column=1).value not in (None, "")
+            }
+        finally:
+            workbook.close()
+
     def _validate_headers(self, worksheet: object) -> None:
         headers = tuple(worksheet.cell(row=1, column=index).value for index in range(1, 7))
         if headers != EXCEL_HEADERS:

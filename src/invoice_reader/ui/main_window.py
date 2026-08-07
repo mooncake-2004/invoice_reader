@@ -194,6 +194,8 @@ class MainWindow(ttk.Frame):
         saved_items = self._queue_repository.load_items(directory)
         self._batch_queue = BatchQueue(directory)
         self._batch_queue.replace_paths(paths, saved_items)
+        self._populate_queue_plmns()
+        self._reconcile_queue_with_excel()
         self._queue_repository.save(self._batch_queue)
         self._queue_panel.set_queue(self._batch_queue)
 
@@ -242,15 +244,52 @@ class MainWindow(ttk.Frame):
     def _load_next_pending_item(self) -> None:
         item = self._batch_queue.next_pending()
         if item is not None:
-            self._load_queue_item(item, True)
+            open_path = self._queue_item_open_path(item)
+            if open_path:
+                self._load_queue_item(item, True, open_path)
 
     def _set_queue_status(self, file_path: str, status: QueueStatus) -> None:
         item = self._batch_queue.get(file_path)
         if item is None:
             return
+        if item.status == QueueStatus.COMPLETED and status != QueueStatus.COMPLETED:
+            return
         updated_item = self._batch_queue.set_status(file_path, status)
         self._queue_repository.save(self._batch_queue)
         self._queue_panel.update_item(updated_item)
+
+    def _set_queue_plmn(self, file_path: str, plmn: str) -> None:
+        item = self._batch_queue.get(file_path)
+        if item is None:
+            return
+        self._batch_queue.set_plmn(file_path, plmn)
+        changed_items = self._reconcile_queue_with_excel()
+        self._queue_repository.save(self._batch_queue)
+        for changed_item in changed_items:
+            self._queue_panel.update_item(changed_item)
+
+    def _populate_queue_plmns(self) -> None:
+        parser = FilenameParser(self._settings_repository.load_filename_patterns())
+        for item in self._batch_queue.items():
+            if item.plmn:
+                continue
+            for pdf_path in (item.file_path, item.archive_path):
+                if pdf_path:
+                    item.plmn = parser.parse(Path(pdf_path).name)
+                if item.plmn:
+                    break
+
+    def _reconcile_queue_with_excel(self) -> list[QueueItem]:
+        completed_plmns = self._excel_service.read_plmns(self._excel_path) if self._excel_path else set()
+        return self._batch_queue.reconcile_completed(completed_plmns)
+
+    def _refresh_queue_for_excel(self) -> None:
+        if not self._batch_queue.directory:
+            return
+        changed_items = self._reconcile_queue_with_excel()
+        self._queue_repository.save(self._batch_queue)
+        for item in changed_items:
+            self._queue_panel.update_item(item)
 
     def _queue_status_path(self) -> str:
         """Return the stable queue path for the current PDF when one exists."""
@@ -291,12 +330,13 @@ class MainWindow(ttk.Frame):
         if queued_item is not None and queued_item.status != QueueStatus.COMPLETED:
             self._set_queue_status(queued_item.file_path, QueueStatus.PROCESSING)
             self._queue_panel.set_current(queued_item.file_path)
-        self._show_existing_approval_notice()
         parser = FilenameParser(self._settings_repository.load_filename_patterns())
         self._current_plmn = parser.parse(service.path.name)
         if not self._current_plmn:
             self._pause_for_unparsed_plmn(service, parser, session_id)
             return
+        self._set_queue_plmn(self._queue_status_path(), self._current_plmn)
+        self._show_existing_approval_notice()
         self._continue_template_match(service, session_id)
 
     def _pause_for_unparsed_plmn(
@@ -377,6 +417,8 @@ class MainWindow(ttk.Frame):
         if not self._is_current_session(session_id):
             return
         self._current_plmn = plmn
+        self._set_queue_plmn(self._queue_status_path(), self._current_plmn)
+        self._show_existing_approval_notice()
         self._continue_template_match(service, session_id)
 
     def _continue_template_match(self, service: PdfService, session_id: int) -> None:
@@ -537,6 +579,7 @@ class MainWindow(ttk.Frame):
     def _after_excel_written(self, record: InvoiceRecord, approved_at: str) -> None:
         record.status = InvoiceStatus.EXCEL_WRITTEN
         self._approval_repository.save(record, approved_at, self._excel_path, True)
+        self._refresh_queue_for_excel()
         self._approval_panel.set_recovery_actions(False, False)
         if not self._archive_directory:
             self._template_editor.set_status("已写入 Excel；未设置归档目录。")
@@ -594,8 +637,9 @@ class MainWindow(ttk.Frame):
         self._template_editor.set_status(f"已归档到 {archive_path}")
         messagebox.showinfo("已归档", f"已归档到 {archive_path}", parent=self.winfo_toplevel())
         if self._batch_queue.get(self._current_queue_path) is not None:
-            self._batch_queue.set_archive_path(self._current_queue_path, archive_path)
-            self._set_queue_status(self._current_queue_path, QueueStatus.COMPLETED)
+            updated_item = self._batch_queue.set_archive_path(self._current_queue_path, archive_path)
+            self._queue_repository.save(self._batch_queue)
+            self._queue_panel.update_item(updated_item)
         self._load_next_pending_item()
 
     def _archive_failed(self, record: InvoiceRecord, approved_at: str, reason: str) -> None:
@@ -645,6 +689,7 @@ class MainWindow(ttk.Frame):
         self._settings_repository.save_excel_path(excel_path)
         self._excel_panel.set_excel_path(excel_path)
         self._excel_section.set_summary(self._excel_summary())
+        self._refresh_queue_for_excel()
 
     def _load_excel_path(self) -> str:
         excel_path = self._settings_repository.load_excel_path()
@@ -665,7 +710,10 @@ class MainWindow(ttk.Frame):
         return self._settings_repository.load_archive_directory()
 
     def _show_existing_approval_notice(self) -> None:
-        if self._approval_repository.find_completed_by_pdf_path(self._current_pdf_path) is not None:
+        if self._excel_path and self._current_plmn and self._excel_service.find_record(
+            self._excel_path,
+            self._current_plmn,
+        ) is not None:
             messagebox.showinfo("已审批过", "这张 PDF 已审批过。", parent=self.winfo_toplevel())
 
     def _empty_current_record(self, status: InvoiceStatus) -> InvoiceRecord:

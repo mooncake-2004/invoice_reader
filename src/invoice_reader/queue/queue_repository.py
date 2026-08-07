@@ -28,6 +28,7 @@ class QueueRepository:
                 item.file_path: {
                     "status": item.status.value,
                     "archive_path": item.archive_path,
+                    "plmn": item.plmn,
                 }
                 for item in queue.items()
             },
@@ -49,6 +50,7 @@ class QueueRepository:
                     str(file_path),
                     QueueStatus(str(values["status"])),
                     str(values.get("archive_path", "")),
+                    str(values.get("plmn", "")),
                 )
                 for file_path, values in item_data.items()
                 if isinstance(values, dict)

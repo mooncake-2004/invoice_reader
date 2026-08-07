@@ -88,6 +88,15 @@ def test_finds_an_existing_exact_plmn_row(tmp_path) -> None:
         "200",
         "2026-08-06T10:00:00+08:00",
     )
+    assert service.read_plmns(str(excel_path)) == {"ABCDE"}
+
+
+def test_empty_monthly_workbook_has_no_completed_plmns(tmp_path) -> None:
+    excel_path = tmp_path / "2026-09.xlsx"
+    service = ExcelService()
+    service.create_monthly_workbook(str(excel_path))
+
+    assert service.read_plmns(str(excel_path)) == set()
 
 
 def test_writes_decimal_comma_sdr_as_a_numeric_excel_cell(tmp_path) -> None:
