@@ -15,6 +15,7 @@ from invoice_reader.excel.excel_errors import DuplicatePlmnError, ExcelHeaderErr
 from invoice_reader.excel.excel_service import ExcelService
 from invoice_reader.extraction.invoice2data_adapter import Invoice2DataAdapter
 from invoice_reader.infrastructure.defaults import template_defaults
+from invoice_reader.infrastructure.reselection_diagnostics import log_reselection
 from invoice_reader.repositories.approval_repository import ApprovalRepository
 from invoice_reader.repositories.settings_repository import SettingsRepository
 from invoice_reader.queue.queue_models import BatchQueue, QueueItem, QueueStatus
@@ -221,7 +222,7 @@ class MainWindow(ttk.Frame):
             self._set_queue_status(item.file_path, QueueStatus.PROCESSING)
         self._queue_panel.set_current(item.file_path)
         self._current_queue_path = item.file_path
-        self._viewer.open_pdf(open_path or item.file_path)
+        self._viewer.open_pdf(open_path or item.file_path, trigger="queue")
 
     def _skip_current_queue_item(self) -> None:
         if self._batch_queue.get(self._current_queue_path) is None:
@@ -443,12 +444,30 @@ class MainWindow(ttk.Frame):
         """Make the next PDF box replace one field on this invoice only."""
         if self._record is None:
             return
+        log_reselection(
+            "reselect start: sid=%s, field=%s, pdf=%s",
+            self._current_session_id,
+            field_name,
+            self._current_pdf_path,
+        )
         self._viewer.start_field_reselection(field_name, self._current_session_id)
         self._template_editor.set_status(f"请在 PDF 上重新框选 {field_name}。")
 
     def _field_reselected(self, session_id: int, field_name: str, field: TemplateField) -> None:
         """Extract a one-off current-invoice field from a newly drawn box."""
-        if not self._is_current_session(session_id) or self._record is None:
+        log_reselection("reselect fired: sid=%s, field=%s", session_id, field_name)
+        if not self._is_current_session(session_id):
+            log_reselection(
+                "reselect dropped: session mismatch, callback_sid=%s, current_sid=%s",
+                session_id,
+                self._current_session_id,
+            )
+            return
+        if self._record is None:
+            log_reselection(
+                "reselect dropped: record is None, pdf=%s",
+                self._current_pdf_path,
+            )
             return
         extracted_field = self._invoice2data_adapter.extract_field(
             self._current_pdf_path,
