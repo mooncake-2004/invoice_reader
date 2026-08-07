@@ -217,11 +217,20 @@ class MainWindow(ttk.Frame):
 
     def _load_queue_item(self, item: QueueItem, mark_processing: bool, open_path: str | None = None) -> None:
         """Open a selected queue item without changing its original queue key."""
+        self._restore_unapproved_queue_item(item.file_path)
         self._current_queue_path = item.file_path
         self._queue_panel.set_current(item.file_path)
         if mark_processing:
             self._set_queue_status(item.file_path, QueueStatus.PROCESSING)
         self._viewer.open_pdf(open_path or item.file_path)
+
+    def _restore_unapproved_queue_item(self, next_file_path: str) -> None:
+        """Return the previous unapproved processing item to the pending queue."""
+        if self._current_queue_path == next_file_path:
+            return
+        current_item = self._batch_queue.get(self._current_queue_path)
+        if current_item is not None and current_item.status == QueueStatus.PROCESSING:
+            self._set_queue_status(current_item.file_path, QueueStatus.PENDING)
 
     def _skip_current_queue_item(self) -> None:
         if self._batch_queue.get(self._current_queue_path) is None:

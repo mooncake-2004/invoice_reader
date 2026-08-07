@@ -95,6 +95,7 @@ def test_queue_item_becomes_current_before_processing_status_is_applied() -> Non
     item = QueueItem("invoice.pdf")
     window = object.__new__(MainWindow)
     window._current_queue_path = ""
+    window._batch_queue = BatchQueue(items=[item])
     window._queue_panel = SimpleNamespace(
         set_current=lambda path: events.append(("current", path)),
     )
@@ -108,3 +109,20 @@ def test_queue_item_becomes_current_before_processing_status_is_applied() -> Non
         ("status", ("invoice.pdf", QueueStatus.PROCESSING)),
         ("open", "invoice.pdf"),
     ]
+
+
+def test_switching_away_restores_unapproved_processing_item_to_pending() -> None:
+    first = QueueItem("first.pdf", QueueStatus.PROCESSING)
+    second = QueueItem("second.pdf", QueueStatus.PENDING)
+    queue = BatchQueue(items=[first, second])
+    window = object.__new__(MainWindow)
+    window._batch_queue = queue
+    window._current_queue_path = first.file_path
+    window._queue_panel = SimpleNamespace(set_current=lambda _path: None)
+    window._viewer = SimpleNamespace(open_pdf=lambda _path: None)
+    window._set_queue_status = lambda path, status: queue.set_status(path, status)
+
+    MainWindow._load_queue_item(window, second, True)
+
+    assert first.status == QueueStatus.PENDING
+    assert second.status == QueueStatus.PROCESSING
