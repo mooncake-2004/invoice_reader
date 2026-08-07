@@ -32,6 +32,7 @@ class QueueItem:
 
     file_path: str
     status: QueueStatus = QueueStatus.PENDING
+    archive_path: str = ""
 
     @property
     def filename(self) -> str:
@@ -53,15 +54,19 @@ class BatchQueue:
             entries = (item for item in entries if item.status == status)
         return sorted(entries, key=lambda item: item.filename.casefold())
 
-    def replace_paths(self, paths: list[str], saved_statuses: dict[str, QueueStatus]) -> None:
-        """Refresh the physical directory while retaining stored statuses by path."""
+    def replace_paths(self, paths: list[str], saved_items: dict[str, QueueItem]) -> None:
+        """Refresh the directory while retaining completed and skipped queue items."""
         retained_paths = {
             path
-            for path, status in saved_statuses.items()
-            if status in (QueueStatus.COMPLETED, QueueStatus.SKIPPED)
+            for path, item in saved_items.items()
+            if item.status in (QueueStatus.COMPLETED, QueueStatus.SKIPPED)
         }
         self._items = {
-            path: QueueItem(path, saved_statuses.get(path, QueueStatus.PENDING))
+            path: QueueItem(
+                path,
+                saved_items.get(path, QueueItem(path)).status,
+                saved_items.get(path, QueueItem(path)).archive_path,
+            )
             for path in set(paths) | retained_paths
         }
 
@@ -69,6 +74,12 @@ class BatchQueue:
         """Set and return a queued item's new state."""
         item = self._items[file_path]
         item.status = status
+        return item
+
+    def set_archive_path(self, file_path: str, archive_path: str) -> QueueItem:
+        """Save the completed PDF location without changing its queue identity."""
+        item = self._items[file_path]
+        item.archive_path = archive_path
         return item
 
     def get(self, file_path: str) -> QueueItem | None:

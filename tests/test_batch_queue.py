@@ -1,8 +1,9 @@
 """Tests for batch queue state, scanning, and local persistence."""
 
-from invoice_reader.queue.queue_models import BatchQueue, QueueStatus
+from invoice_reader.queue.queue_models import BatchQueue, QueueItem, QueueStatus
 from invoice_reader.queue.queue_repository import QueueRepository
 from invoice_reader.queue.queue_scanner import QueueScanner
+from invoice_reader.ui.main_window import MainWindow
 
 
 def test_scans_only_sorted_pdf_files_in_selected_directory(tmp_path) -> None:
@@ -25,20 +26,36 @@ def test_rescan_retains_completed_status_for_archived_source(tmp_path) -> None:
     queue.set_status(pdf_path, QueueStatus.COMPLETED)
 
     refreshed = BatchQueue(str(tmp_path))
-    refreshed.replace_paths([], {pdf_path: QueueStatus.COMPLETED})
+    refreshed.replace_paths(
+        [],
+        {pdf_path: QueueItem(pdf_path, QueueStatus.COMPLETED, str(tmp_path / "archive" / "completed.pdf"))},
+    )
 
     assert refreshed.get(pdf_path).status == QueueStatus.COMPLETED
+    assert refreshed.get(pdf_path).archive_path == str(tmp_path / "archive" / "completed.pdf")
 
 
-def test_persists_statuses_for_the_same_selected_directory(tmp_path) -> None:
+def test_persists_item_status_and_archive_path_for_the_same_directory(tmp_path) -> None:
     directory = str(tmp_path / "invoices")
     pdf_path = str(tmp_path / "invoices" / "one.pdf")
     queue = BatchQueue(directory)
     queue.replace_paths([pdf_path], {})
     queue.set_status(pdf_path, QueueStatus.SKIPPED)
+    queue.set_archive_path(pdf_path, str(tmp_path / "archive" / "one.pdf"))
     repository = QueueRepository(tmp_path / "batch_queue.json")
 
     repository.save(queue)
 
-    assert repository.load_statuses(directory) == {pdf_path: QueueStatus.SKIPPED}
-    assert repository.load_statuses(str(tmp_path / "other")) == {}
+    saved_item = repository.load_items(directory)[pdf_path]
+    assert saved_item.status == QueueStatus.SKIPPED
+    assert saved_item.archive_path == str(tmp_path / "archive" / "one.pdf")
+    assert repository.load_items(str(tmp_path / "other")) == {}
+
+
+def test_completed_item_uses_archive_path_when_source_is_missing(tmp_path) -> None:
+    archive_path = tmp_path / "archive" / "completed.pdf"
+    archive_path.parent.mkdir()
+    archive_path.write_bytes(b"pdf")
+    item = QueueItem(str(tmp_path / "source" / "completed.pdf"), QueueStatus.COMPLETED, str(archive_path))
+
+    assert MainWindow._queue_item_open_path(object(), item) == str(archive_path)

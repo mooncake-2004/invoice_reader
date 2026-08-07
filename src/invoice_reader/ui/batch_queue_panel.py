@@ -32,7 +32,11 @@ class BatchQueuePanel(ttk.LabelFrame):
         self._queue = BatchQueue()
         self._current_path = ""
         self._on_item_selected = on_item_selected
-        self._filter = tk.StringVar(value="全部")
+        self._filter_variables = {
+            label: tk.BooleanVar(value=True)
+            for label, status in FILTER_LABELS.items()
+            if status is not None
+        }
         self._statistics = tk.StringVar(value="总数 0 / 已完成 0 / 待处理 0 / 失败 0")
         self._build(on_select_folder, on_rescan, on_skip_current)
 
@@ -74,14 +78,16 @@ class BatchQueuePanel(ttk.LabelFrame):
         ttk.Button(controls, text="选择批量处理文件夹", command=on_select_folder).pack(side="left")
         ttk.Button(controls, text="重新扫描", command=on_rescan).pack(side="left", padx=(6, 0))
         ttk.Button(controls, text="跳过当前", command=on_skip_current).pack(side="left", padx=(6, 0))
-        ttk.Combobox(
-            controls,
-            textvariable=self._filter,
-            values=list(FILTER_LABELS),
-            state="readonly",
-            width=10,
-        ).pack(side="right")
-        self._filter.trace_add("write", lambda *_args: self._refresh_tree())
+        self._filter_button = ttk.Menubutton(controls, text="状态筛选")
+        self._filter_menu = tk.Menu(self._filter_button, tearoff=False)
+        for label, variable in self._filter_variables.items():
+            self._filter_menu.add_checkbutton(
+                label=label,
+                variable=variable,
+                command=self._refresh_tree,
+            )
+        self._filter_button.configure(menu=self._filter_menu)
+        self._filter_button.pack(side="right")
         ttk.Label(self, textvariable=self._statistics).pack(fill="x", pady=(6, 4))
         tree_frame = ttk.Frame(self)
         tree_frame.pack(fill="both", expand=True)
@@ -105,11 +111,15 @@ class BatchQueuePanel(ttk.LabelFrame):
         self.set_current(self._current_path)
 
     def _filtered_items(self) -> list[QueueItem]:
-        return self._queue.items(FILTER_LABELS[self._filter.get()])
+        return [item for item in self._queue.items() if self._matches_filter(item)]
 
     def _matches_filter(self, item: QueueItem) -> bool:
-        selected_status = FILTER_LABELS[self._filter.get()]
-        return selected_status is None or item.status == selected_status
+        if all(variable.get() for variable in self._filter_variables.values()):
+            return True
+        return any(
+            variable.get() and FILTER_LABELS[label] == item.status
+            for label, variable in self._filter_variables.items()
+        )
 
     def _update_statistics(self) -> None:
         counts = self._queue.counts()

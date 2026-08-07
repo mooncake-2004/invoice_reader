@@ -55,6 +55,7 @@ class PdfViewer(ttk.Frame):
         self._one_time_field: str | None = None
         self._selected_field: str | None = None
         self._drawing_overlay: FieldOverlay | None = None
+        self._selection_start: tuple[float, float] | None = None
         self._overlays: dict[str, FieldOverlay] = {}
         self._field_locations: dict[str, TemplateField] = {}
         self._field_texts: dict[str, str] = {}
@@ -98,6 +99,7 @@ class PdfViewer(ttk.Frame):
         self._field_texts.clear()
         self._overlays.clear()
         self._drawing_overlay = None
+        self._selection_start = None
         self._selected_field = None
         self._one_time_field = None
         self._status.set("已关闭当前 PDF，请打开下一张。")
@@ -150,6 +152,15 @@ class PdfViewer(ttk.Frame):
             side="left", padx=(4, 0)
         )
         ttk.Button(toolbar, text="100%", command=self._reset_zoom).pack(side="left", padx=(4, 0))
+        ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=10)
+        ttk.Button(toolbar, text="<", width=3, command=lambda: self._change_page(-1)).pack(side="left")
+        self._page_number = tk.StringVar(value="1")
+        self._page_entry = ttk.Entry(toolbar, textvariable=self._page_number, width=5, justify="center")
+        self._page_entry.pack(side="left", padx=(4, 2))
+        self._page_entry.bind("<Return>", self._jump_to_page)
+        self._page_total = tk.StringVar(value="/ 0")
+        ttk.Label(toolbar, textvariable=self._page_total).pack(side="left")
+        ttk.Button(toolbar, text=">", width=3, command=lambda: self._change_page(1)).pack(side="left", padx=(4, 0))
 
         self._status = tk.StringVar(value="请打开一张 PDF")
         ttk.Label(toolbar, textvariable=self._status).pack(side="right")
@@ -217,6 +228,20 @@ class PdfViewer(ttk.Frame):
             if show_bottom:
                 self._canvas.yview_moveto(1)
 
+    def _jump_to_page(self, _event: tk.Event) -> str:
+        """Jump to a valid 1-based page entered in the toolbar."""
+        try:
+            requested_page = int(self._page_number.get())
+        except ValueError:
+            self._restore_page_number()
+            return "break"
+        if not 1 <= requested_page <= self._service.page_count:
+            self._restore_page_number()
+            return "break"
+        self._page_index = requested_page - 1
+        self._render_page()
+        return "break"
+
     def _change_zoom(self, amount: float) -> None:
         if self._service.page_count == 0:
             return
@@ -252,9 +277,15 @@ class PdfViewer(ttk.Frame):
         self._drawing_overlay = None
         self._overlays.clear()
         self._draw_current_page_fields()
+        self._restore_page_number()
         self._status.set(
             f"第 {self._page_index + 1} / {self._service.page_count} 页 | 缩放 {self._zoom:.0%}"
         )
+
+    def _restore_page_number(self) -> None:
+        """Synchronize the page controls with the currently visible PDF page."""
+        self._page_number.set(str(self._page_index + 1 if self._service.page_count else 1))
+        self._page_total.set(f"/ {self._service.page_count}")
 
     def _draw_current_page_fields(self) -> None:
         for field_name in FIELD_NAMES:
@@ -303,6 +334,7 @@ class PdfViewer(ttk.Frame):
             self._remove_field(self._one_time_field)
             self._selected_field = self._one_time_field
             self._drawing_overlay = self._create_overlay(self._one_time_field, *point, *point)
+            self._selection_start = point
             self._field_texts[self._one_time_field] = ""
             self._notify_fields_changed()
             return
@@ -316,6 +348,7 @@ class PdfViewer(ttk.Frame):
         self._remove_field(self._active_field)
         self._selected_field = self._active_field
         self._drawing_overlay = self._create_overlay(self._active_field, *point, *point)
+        self._selection_start = point
         self._field_texts[self._active_field] = ""
         self._notify_fields_changed()
 
@@ -323,9 +356,17 @@ class PdfViewer(ttk.Frame):
         overlay = self._drawing_overlay
         if overlay is None:
             return
-        start_x, start_y, _, _ = self._canvas.coords(overlay.rectangle_id)
+        if self._selection_start is None:
+            return
+        start_x, start_y = self._selection_start
         end_x, end_y = self._canvas_point(event)
-        self._canvas.coords(overlay.rectangle_id, start_x, start_y, end_x, end_y)
+        self._canvas.coords(
+            overlay.rectangle_id,
+            min(start_x, end_x),
+            min(start_y, end_y),
+            max(start_x, end_x),
+            max(start_y, end_y),
+        )
         self._schedule_selection_text_update()
 
     def _finish_selection(self, event: tk.Event) -> None:
@@ -334,6 +375,7 @@ class PdfViewer(ttk.Frame):
             return
         self._update_selection(event)
         self._drawing_overlay = None
+        self._selection_start = None
         bbox_normalized = self._normalized_bbox(overlay)
         if bbox_normalized is None:
             self._remove_field(overlay.field_name)

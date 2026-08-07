@@ -59,6 +59,7 @@ class MainWindow(ttk.Frame):
         self._approved_at = ""
         self._current_plmn = ""
         self._current_pdf_path = ""
+        self._current_queue_path = ""
         self._record: InvoiceRecord | None = None
         self._current_template: InvoiceTemplate | None = None
         self._template_repository = TemplateRepository()
@@ -185,9 +186,9 @@ class MainWindow(ttk.Frame):
         self._finish_batch_scan(directory, paths or [])
 
     def _finish_batch_scan(self, directory: str, paths: list[str]) -> None:
-        saved_statuses = self._queue_repository.load_statuses(directory)
+        saved_items = self._queue_repository.load_items(directory)
         self._batch_queue = BatchQueue(directory)
-        self._batch_queue.replace_paths(paths, saved_statuses)
+        self._batch_queue.replace_paths(paths, saved_items)
         self._queue_repository.save(self._batch_queue)
         self._queue_panel.set_queue(self._batch_queue)
 
@@ -195,18 +196,32 @@ class MainWindow(ttk.Frame):
         item = self._batch_queue.get(file_path)
         if item is None:
             return
-        self._load_queue_item(item, item.status != QueueStatus.COMPLETED)
+        open_path = self._queue_item_open_path(item)
+        if not open_path:
+            messagebox.showwarning("文件未找到", "原路径和归档路径中均未找到该 PDF。", parent=self.winfo_toplevel())
+            return
+        self._load_queue_item(item, item.status != QueueStatus.COMPLETED, open_path)
 
-    def _load_queue_item(self, item: QueueItem, mark_processing: bool) -> None:
+    def _queue_item_open_path(self, item: QueueItem) -> str:
+        """Prefer the source PDF, then its saved archive location."""
+        if Path(item.file_path).is_file():
+            return item.file_path
+        if item.archive_path and Path(item.archive_path).is_file():
+            return item.archive_path
+        return ""
+
+    def _load_queue_item(self, item: QueueItem, mark_processing: bool, open_path: str | None = None) -> None:
+        """Open a selected queue item without changing its original queue key."""
         if mark_processing:
             self._set_queue_status(item.file_path, QueueStatus.PROCESSING)
         self._queue_panel.set_current(item.file_path)
-        self._viewer.open_pdf(item.file_path)
+        self._current_queue_path = item.file_path
+        self._viewer.open_pdf(open_path or item.file_path)
 
     def _skip_current_queue_item(self) -> None:
-        if self._batch_queue.get(self._current_pdf_path) is None:
+        if self._batch_queue.get(self._current_queue_path) is None:
             return
-        self._set_queue_status(self._current_pdf_path, QueueStatus.SKIPPED)
+        self._set_queue_status(self._current_queue_path, QueueStatus.SKIPPED)
         self._viewer.close_current_pdf()
         self._load_next_pending_item()
 
@@ -223,6 +238,10 @@ class MainWindow(ttk.Frame):
         self._queue_repository.save(self._batch_queue)
         self._queue_panel.update_item(updated_item)
 
+    def _queue_status_path(self) -> str:
+        """Return the stable queue path for the current PDF when one exists."""
+        return self._current_queue_path or self._current_pdf_path
+
     def _set_active_field(self, field_name: str) -> None:
         """Route the template editor's field selection to the PDF viewer."""
         self._viewer.set_active_field(field_name)
@@ -235,17 +254,24 @@ class MainWindow(ttk.Frame):
         """Show one structured record in the approval panel."""
         self._approval_panel.show_record(record)
 
+    def _queue_item_matches_path(self, pdf_path: Path) -> bool:
+        """Check whether the opened file belongs to the retained queue item."""
+        item = self._batch_queue.get(self._current_queue_path)
+        return item is not None and str(pdf_path) in (item.file_path, item.archive_path)
+
     def _match_template(self, service: PdfService) -> None:
         """Parse the PDF filename PLMN and apply its local template directly."""
         self._current_pdf_path = str(service.path)
+        if not self._queue_item_matches_path(service.path):
+            self._current_queue_path = ""
         self._record = None
         self._current_template = None
         self._approved_at = ""
         self._approval_panel.clear()
-        queued_item = self._batch_queue.get(self._current_pdf_path)
+        queued_item = self._batch_queue.get(self._current_queue_path)
         if queued_item is not None and queued_item.status != QueueStatus.COMPLETED:
-            self._set_queue_status(self._current_pdf_path, QueueStatus.PROCESSING)
-            self._queue_panel.set_current(self._current_pdf_path)
+            self._set_queue_status(queued_item.file_path, QueueStatus.PROCESSING)
+            self._queue_panel.set_current(queued_item.file_path)
         self._show_existing_approval_notice()
         parser = FilenameParser(self._settings_repository.load_filename_patterns())
         self._current_plmn = parser.parse(service.path.name)
@@ -254,13 +280,13 @@ class MainWindow(ttk.Frame):
         self._plmn_section.set_summary(f"PLMN: {self._current_plmn or '未解析'}")
         if not self._current_plmn:
             self._template_section.set_summary("无模板")
-            self._set_queue_status(self._current_pdf_path, QueueStatus.NO_TEMPLATE)
+            self._set_queue_status(self._queue_status_path(), QueueStatus.NO_TEMPLATE)
             self._template_editor.set_status("文件名未解析出 PLMN：请选择已有模板，或先配置文件名模式后新建。")
             return
         template = self._template_matcher.match(self._templates, self._current_plmn)
         if template is None:
             self._template_section.set_summary("无模板")
-            self._set_queue_status(self._current_pdf_path, QueueStatus.NO_TEMPLATE)
+            self._set_queue_status(self._queue_status_path(), QueueStatus.NO_TEMPLATE)
             self._record = self._empty_template_record()
             self._show_record(self._record)
             self._refresh_template_save_action()
@@ -336,7 +362,7 @@ class MainWindow(ttk.Frame):
                 self._current_plmn,
             )
         except (OSError, RuntimeError, ValueError) as error:
-            self._set_queue_status(self._current_pdf_path, QueueStatus.EXTRACTION_FAILED)
+            self._set_queue_status(self._queue_status_path(), QueueStatus.EXTRACTION_FAILED)
             self._template_editor.set_status(f"提取失败：{error}")
             self._template_section.set_summary(template.display_name)
             return False
@@ -345,7 +371,7 @@ class MainWindow(ttk.Frame):
         self._template_editor.select_template(template)
         self._template_section.set_summary(template.display_name)
         if self._template_fields_are_empty(template):
-            self._set_queue_status(self._current_pdf_path, QueueStatus.EXTRACTION_FAILED)
+            self._set_queue_status(self._queue_status_path(), QueueStatus.EXTRACTION_FAILED)
             self._template_editor.set_status("提取失败：模板字段均为空。")
             return False
         self._template_editor.set_status(f"已应用模板：{template.display_name}")
@@ -510,7 +536,9 @@ class MainWindow(ttk.Frame):
         self._approval_panel.set_recovery_actions(False, False)
         self._template_editor.set_status(f"已归档到 {archive_path}")
         messagebox.showinfo("已归档", f"已归档到 {archive_path}", parent=self.winfo_toplevel())
-        self._set_queue_status(self._current_pdf_path, QueueStatus.COMPLETED)
+        if self._batch_queue.get(self._current_queue_path) is not None:
+            self._batch_queue.set_archive_path(self._current_queue_path, archive_path)
+            self._set_queue_status(self._current_queue_path, QueueStatus.COMPLETED)
         self._load_next_pending_item()
 
     def _archive_failed(self, record: InvoiceRecord, approved_at: str, reason: str) -> None:
