@@ -5,6 +5,13 @@ import tkinter as tk
 from tkinter import ttk
 
 
+def _show_above_parent(dialog: tk.Toplevel, main_window: tk.Misc) -> None:
+    """Bring the modal PLMN choice visibly above its owning application window."""
+    dialog.deiconify()
+    dialog.lift(main_window)
+    dialog.focus_force()
+
+
 class PlmnResolutionDialog:
     """Offer file renaming or a direct PLMN entry path."""
 
@@ -42,6 +49,7 @@ class PlmnResolutionDialog:
         x = main_window.winfo_rootx() + (main_window.winfo_width() - dialog.winfo_width()) // 2
         y = main_window.winfo_rooty() + (main_window.winfo_height() - dialog.winfo_height()) // 2
         dialog.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        _show_above_parent(dialog, main_window)
         dialog.protocol("WM_DELETE_WINDOW", cancel)
         dialog.bind("<Escape>", lambda _event: cancel())
         dialog.grab_set()

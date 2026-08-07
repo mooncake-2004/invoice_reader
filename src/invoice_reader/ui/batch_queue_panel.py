@@ -17,6 +17,15 @@ FILTER_LABELS = {
 }
 
 
+def queue_statistics(counts: dict[QueueStatus, int]) -> str:
+    """Format queue totals without classifying missing templates as extraction failures."""
+    return (
+        f"总数 {sum(counts.values())} / 已完成 {counts[QueueStatus.COMPLETED]} / "
+        f"待处理 {counts[QueueStatus.PENDING]} / 无模板 {counts[QueueStatus.NO_TEMPLATE]} / "
+        f"提取失败 {counts[QueueStatus.EXTRACTION_FAILED]}"
+    )
+
+
 class BatchQueuePanel(ttk.LabelFrame):
     """Render a filtered queue with one Treeview item per source PDF."""
 
@@ -123,11 +132,7 @@ class BatchQueuePanel(ttk.LabelFrame):
 
     def _update_statistics(self) -> None:
         counts = self._queue.counts()
-        failed = counts[QueueStatus.NO_TEMPLATE] + counts[QueueStatus.EXTRACTION_FAILED]
-        self._statistics.set(
-            f"总数 {sum(counts.values())} / 已完成 {counts[QueueStatus.COMPLETED]} / "
-            f"待处理 {counts[QueueStatus.PENDING]} / 失败 {failed}"
-        )
+        self._statistics.set(queue_statistics(counts))
 
     def _selected(self, _event: tk.Event) -> None:
         selected = self._tree.selection()

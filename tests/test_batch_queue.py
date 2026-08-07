@@ -3,6 +3,7 @@
 from invoice_reader.queue.queue_models import BatchQueue, QueueItem, QueueStatus
 from invoice_reader.queue.queue_repository import QueueRepository
 from invoice_reader.queue.queue_scanner import QueueScanner
+from invoice_reader.ui.batch_queue_panel import queue_statistics
 from invoice_reader.ui.main_window import MainWindow
 
 
@@ -59,3 +60,17 @@ def test_completed_item_uses_archive_path_when_source_is_missing(tmp_path) -> No
     item = QueueItem(str(tmp_path / "source" / "completed.pdf"), QueueStatus.COMPLETED, str(archive_path))
 
     assert MainWindow._queue_item_open_path(object(), item) == str(archive_path)
+
+
+def test_queue_statistics_keeps_missing_templates_separate_from_extraction_failures() -> None:
+    queue = BatchQueue(
+        items=[
+            QueueItem("no-template.pdf", QueueStatus.NO_TEMPLATE),
+            QueueItem("failed.pdf", QueueStatus.EXTRACTION_FAILED),
+        ]
+    )
+
+    summary = queue_statistics(queue.counts())
+
+    assert "无模板 1" in summary
+    assert "提取失败 1" in summary

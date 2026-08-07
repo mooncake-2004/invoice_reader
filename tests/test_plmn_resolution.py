@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from invoice_reader.queue.queue_models import QueueStatus
 from invoice_reader.ui import main_window
 from invoice_reader.ui.main_window import MainWindow
+from invoice_reader.ui.plmn_resolution_dialog import _show_above_parent
 
 
 class _ResolutionWindow:
@@ -63,3 +64,22 @@ def test_stale_plmn_callback_is_ignored(monkeypatch) -> None:
     MainWindow._handle_unparsed_plmn_action(window, object(), object(), 6, "manual")
 
     assert window.continued_with == ""
+
+
+def test_resolution_dialog_is_raised_and_focused() -> None:
+    calls: list[tuple[str, object | None]] = []
+
+    class Dialog:
+        def deiconify(self) -> None:
+            calls.append(("deiconify", None))
+
+        def lift(self, parent: object) -> None:
+            calls.append(("lift", parent))
+
+        def focus_force(self) -> None:
+            calls.append(("focus_force", None))
+
+    parent = object()
+    _show_above_parent(Dialog(), parent)
+
+    assert calls == [("deiconify", None), ("lift", parent), ("focus_force", None)]
