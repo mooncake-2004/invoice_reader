@@ -55,18 +55,21 @@ class BatchQueuePanel(ttk.LabelFrame):
         self._refresh_tree()
 
     def update_item(self, item: QueueItem) -> None:
-        """Update only the changed item unless the active filter hides it."""
-        if self._matches_filter(item):
-            self._tree.item(item.file_path, values=(item.filename, STATUS_LABELS[item.status]))
+        """Update one item while keeping the currently processed PDF visible."""
+        if self._item_is_visible(item):
+            self._upsert_item(item)
         elif self._tree.exists(item.file_path):
             self._tree.delete(item.file_path)
         self._update_statistics()
 
     def set_current(self, file_path: str) -> None:
         """Highlight the queue item currently shown in the approval workspace."""
-        if self._tree.exists(self._current_path):
-            self._tree.item(self._current_path, tags=())
+        previous_path = self._current_path
+        if self._tree.exists(previous_path):
+            self._tree.item(previous_path, tags=())
         self._current_path = file_path
+        self._sync_item_visibility(previous_path)
+        self._sync_item_visibility(file_path)
         if self._tree.exists(file_path):
             self._tree.item(file_path, tags=("current",))
             self._tree.focus(file_path)
@@ -115,12 +118,31 @@ class BatchQueuePanel(ttk.LabelFrame):
     def _refresh_tree(self) -> None:
         self._tree.delete(*self._tree.get_children())
         for item in self._filtered_items():
-            self._tree.insert("", "end", iid=item.file_path, values=(item.filename, STATUS_LABELS[item.status]))
+            self._upsert_item(item)
         self._update_statistics()
         self.set_current(self._current_path)
 
     def _filtered_items(self) -> list[QueueItem]:
-        return [item for item in self._queue.items() if self._matches_filter(item)]
+        return [item for item in self._queue.items() if self._item_is_visible(item)]
+
+    def _item_is_visible(self, item: QueueItem) -> bool:
+        return item.file_path == self._current_path or self._matches_filter(item)
+
+    def _sync_item_visibility(self, file_path: str) -> None:
+        item = self._queue.get(file_path)
+        if item is None:
+            return
+        if self._item_is_visible(item):
+            self._upsert_item(item)
+        elif self._tree.exists(file_path):
+            self._tree.delete(file_path)
+
+    def _upsert_item(self, item: QueueItem) -> None:
+        values = (item.filename, STATUS_LABELS[item.status])
+        if self._tree.exists(item.file_path):
+            self._tree.item(item.file_path, values=values)
+        else:
+            self._tree.insert("", "end", iid=item.file_path, values=values)
 
     def _matches_filter(self, item: QueueItem) -> bool:
         if all(variable.get() for variable in self._filter_variables.values()):

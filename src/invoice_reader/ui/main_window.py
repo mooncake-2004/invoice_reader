@@ -15,7 +15,6 @@ from invoice_reader.excel.excel_errors import DuplicatePlmnError, ExcelHeaderErr
 from invoice_reader.excel.excel_service import ExcelService
 from invoice_reader.extraction.invoice2data_adapter import Invoice2DataAdapter
 from invoice_reader.infrastructure.defaults import template_defaults
-from invoice_reader.infrastructure.reselection_diagnostics import log_reselection
 from invoice_reader.repositories.approval_repository import ApprovalRepository
 from invoice_reader.repositories.settings_repository import SettingsRepository
 from invoice_reader.queue.queue_models import BatchQueue, QueueItem, QueueStatus
@@ -218,11 +217,11 @@ class MainWindow(ttk.Frame):
 
     def _load_queue_item(self, item: QueueItem, mark_processing: bool, open_path: str | None = None) -> None:
         """Open a selected queue item without changing its original queue key."""
+        self._current_queue_path = item.file_path
+        self._queue_panel.set_current(item.file_path)
         if mark_processing:
             self._set_queue_status(item.file_path, QueueStatus.PROCESSING)
-        self._queue_panel.set_current(item.file_path)
-        self._current_queue_path = item.file_path
-        self._viewer.open_pdf(open_path or item.file_path, trigger="queue")
+        self._viewer.open_pdf(open_path or item.file_path)
 
     def _skip_current_queue_item(self) -> None:
         if self._batch_queue.get(self._current_queue_path) is None:
@@ -380,7 +379,7 @@ class MainWindow(ttk.Frame):
         if template is None:
             self._template_section.set_summary("无模板")
             self._set_queue_status(self._queue_status_path(), QueueStatus.NO_TEMPLATE)
-            self._record = self._empty_template_record()
+            self._record = self._empty_current_record(InvoiceStatus.NEEDS_TEMPLATE)
             self._show_record(self._record)
             self._refresh_template_save_action()
             self._template_editor.set_status(
@@ -399,6 +398,19 @@ class MainWindow(ttk.Frame):
         template = self._templates_by_id[template_id]
         self._current_template = template
         self._viewer.apply_template_fields(template.fields)
+        self._template_editor.select_template(template)
+        self._template_section.set_summary(template.display_name)
+        if not self._extract_template_record(template):
+            return False
+        if self._template_fields_are_empty(template):
+            self._set_queue_status(self._queue_status_path(), QueueStatus.EXTRACTION_FAILED)
+            self._template_editor.set_status("提取失败：模板字段均为空。")
+            return False
+        self._template_editor.set_status(f"已应用模板：{template.display_name}")
+        return True
+
+    def _extract_template_record(self, template: InvoiceTemplate) -> bool:
+        """Extract one matched template while retaining manual-review state on failure."""
         try:
             self._record = self._invoice2data_adapter.extract(
                 self._current_pdf_path,
@@ -406,19 +418,14 @@ class MainWindow(ttk.Frame):
                 self._current_plmn,
             )
         except (OSError, RuntimeError, ValueError) as error:
+            self._record = self._empty_current_record(InvoiceStatus.REVIEW_REQUIRED)
+            self._show_record(self._record)
+            self._refresh_template_save_action()
             self._set_queue_status(self._queue_status_path(), QueueStatus.EXTRACTION_FAILED)
-            self._template_editor.set_status(f"提取失败：{error}")
-            self._template_section.set_summary(template.display_name)
+            self._template_editor.set_status(f"提取失败：{error}；可重新框选字段。")
             return False
         self._show_record(self._record)
         self._refresh_template_save_action()
-        self._template_editor.select_template(template)
-        self._template_section.set_summary(template.display_name)
-        if self._template_fields_are_empty(template):
-            self._set_queue_status(self._queue_status_path(), QueueStatus.EXTRACTION_FAILED)
-            self._template_editor.set_status("提取失败：模板字段均为空。")
-            return False
-        self._template_editor.set_status(f"已应用模板：{template.display_name}")
         return True
 
     def _template_fields_are_empty(self, template: InvoiceTemplate) -> bool:
@@ -431,43 +438,22 @@ class MainWindow(ttk.Frame):
         """Run PDFium extraction again using the current template boxes."""
         if self._current_template is None:
             return
-        self._record = self._invoice2data_adapter.extract(
-            self._current_pdf_path,
-            self._current_template,
-            self._current_plmn,
-        )
-        self._show_record(self._record)
-        self._refresh_template_save_action()
+        if not self._extract_template_record(self._current_template):
+            return
         self._template_editor.set_status("已重新提取，请审批字段。")
 
     def _start_field_reselection(self, field_name: str) -> None:
         """Make the next PDF box replace one field on this invoice only."""
         if self._record is None:
             return
-        log_reselection(
-            "reselect start: sid=%s, field=%s, pdf=%s",
-            self._current_session_id,
-            field_name,
-            self._current_pdf_path,
-        )
         self._viewer.start_field_reselection(field_name, self._current_session_id)
         self._template_editor.set_status(f"请在 PDF 上重新框选 {field_name}。")
 
     def _field_reselected(self, session_id: int, field_name: str, field: TemplateField) -> None:
         """Extract a one-off current-invoice field from a newly drawn box."""
-        log_reselection("reselect fired: sid=%s, field=%s", session_id, field_name)
         if not self._is_current_session(session_id):
-            log_reselection(
-                "reselect dropped: session mismatch, callback_sid=%s, current_sid=%s",
-                session_id,
-                self._current_session_id,
-            )
             return
         if self._record is None:
-            log_reselection(
-                "reselect dropped: record is None, pdf=%s",
-                self._current_pdf_path,
-            )
             return
         extracted_field = self._invoice2data_adapter.extract_field(
             self._current_pdf_path,
@@ -475,22 +461,10 @@ class MainWindow(ttk.Frame):
             field_name,
             field,
         )
-        log_reselection(
-            "reselect extracted: sid=%s, field=%s, value=%r",
-            session_id,
-            field_name,
-            extracted_field.value,
-        )
         extracted_field.source = FieldSource.MANUAL_SELECTION
         setattr(self._record, field_name, extracted_field)
         self._record.status = InvoiceStatus.EXTRACTED
         self._show_record(self._record)
-        log_reselection(
-            "reselect applied: sid=%s, field=%s, value=%r",
-            session_id,
-            field_name,
-            getattr(self._record, field_name).value,
-        )
         self._refresh_template_save_action()
         self._viewer.highlight_field(field_name)
         self._template_editor.set_status(f"{field_name} 已按当前发票的新框重新提取。")
@@ -685,7 +659,7 @@ class MainWindow(ttk.Frame):
         if self._approval_repository.find_completed_by_pdf_path(self._current_pdf_path) is not None:
             messagebox.showinfo("已审批过", "这张 PDF 已审批过。", parent=self.winfo_toplevel())
 
-    def _empty_template_record(self) -> InvoiceRecord:
+    def _empty_current_record(self, status: InvoiceStatus) -> InvoiceRecord:
         plmn_field = ExtractedField(
             value=self._current_plmn,
             original_value=self._current_plmn,
@@ -696,7 +670,7 @@ class MainWindow(ttk.Frame):
         return InvoiceRecord(
             file_path=self._current_pdf_path,
             plmn=plmn_field,
-            status=InvoiceStatus.NEEDS_TEMPLATE,
+            status=status,
         )
 
     def _refresh_template_save_action(self) -> None:

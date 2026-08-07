@@ -1,9 +1,11 @@
 """Tests for batch queue state, scanning, and local persistence."""
 
+from types import SimpleNamespace
+
 from invoice_reader.queue.queue_models import BatchQueue, QueueItem, QueueStatus
 from invoice_reader.queue.queue_repository import QueueRepository
 from invoice_reader.queue.queue_scanner import QueueScanner
-from invoice_reader.ui.batch_queue_panel import queue_statistics
+from invoice_reader.ui.batch_queue_panel import BatchQueuePanel, queue_statistics
 from invoice_reader.ui.main_window import MainWindow
 
 
@@ -74,3 +76,35 @@ def test_queue_statistics_keeps_missing_templates_separate_from_extraction_failu
 
     assert "无模板 1" in summary
     assert "提取失败 1" in summary
+
+
+def test_current_processing_item_remains_visible_when_filter_excludes_it() -> None:
+    item = QueueItem("current.pdf", QueueStatus.PROCESSING)
+    panel = object.__new__(BatchQueuePanel)
+    panel._current_path = item.file_path
+    panel._matches_filter = lambda _item: False
+
+    assert BatchQueuePanel._item_is_visible(panel, item)
+
+    panel._current_path = "another.pdf"
+    assert not BatchQueuePanel._item_is_visible(panel, item)
+
+
+def test_queue_item_becomes_current_before_processing_status_is_applied() -> None:
+    events: list[tuple[str, object]] = []
+    item = QueueItem("invoice.pdf")
+    window = object.__new__(MainWindow)
+    window._current_queue_path = ""
+    window._queue_panel = SimpleNamespace(
+        set_current=lambda path: events.append(("current", path)),
+    )
+    window._set_queue_status = lambda path, status: events.append(("status", (path, status)))
+    window._viewer = SimpleNamespace(open_pdf=lambda path: events.append(("open", path)))
+
+    MainWindow._load_queue_item(window, item, True)
+
+    assert events == [
+        ("current", "invoice.pdf"),
+        ("status", ("invoice.pdf", QueueStatus.PROCESSING)),
+        ("open", "invoice.pdf"),
+    ]

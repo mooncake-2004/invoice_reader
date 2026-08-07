@@ -8,7 +8,6 @@ from tkinter import filedialog, messagebox, ttk
 import fitz
 from PIL import ImageTk
 
-from invoice_reader.infrastructure.reselection_diagnostics import log_reselection
 from invoice_reader.services.pdf_service import PdfService
 from invoice_reader.templates.template_models import (
     FIELD_NAMES,
@@ -213,9 +212,9 @@ class PdfViewer(ttk.Frame):
         if not path:
             return
 
-        self.open_pdf(path, trigger="toolbar")
+        self.open_pdf(path)
 
-    def open_pdf(self, path: str, trigger: str = "toolbar") -> bool:
+    def open_pdf(self, path: str) -> bool:
         """Open one caller-supplied PDF path for queue-driven processing."""
         if not path:
             return False
@@ -229,12 +228,6 @@ class PdfViewer(ttk.Frame):
         self._page_index = 0
         self._zoom = 1.0
         self._session_id += 1
-        log_reselection(
-            "session bump: new_sid=%s, pdf=%s, trigger=%s",
-            self._session_id,
-            path,
-            trigger,
-        )
         self._field_locations.clear()
         self._field_texts.clear()
         self._selected_field = None
