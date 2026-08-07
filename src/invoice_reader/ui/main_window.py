@@ -1,13 +1,11 @@
 """Main application layout."""
 
 from datetime import datetime
-from dataclasses import replace
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Thread
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
-from uuid import uuid4
 
 from invoice_reader.archive.archive_errors import ArchiveConflictError, ArchiveError
 from invoice_reader.archive.archive_service import ArchiveService
@@ -37,7 +35,6 @@ from invoice_reader.ui.archive_panel import ArchivePanel
 from invoice_reader.ui.archive_conflict_dialog import ArchiveConflictDialog
 from invoice_reader.ui.excel_panel import ExcelPanel
 from invoice_reader.ui.template_editor import TemplateEditor
-from invoice_reader.ui.template_exchange_dialogs import TemplateConflictDialog, TemplateSelectionDialog
 from invoice_reader.ui.batch_queue_panel import BatchQueuePanel
 from invoice_reader.ui.collapsible_panel import CollapsiblePanel
 
@@ -713,9 +710,6 @@ class MainWindow(ttk.Frame):
         if not self._templates:
             messagebox.showinfo("没有模板", "当前没有可导出的模板。", parent=self.winfo_toplevel())
             return
-        templates = TemplateSelectionDialog.ask(self, "导出模板", self._templates)
-        if not templates:
-            return
         export_path = filedialog.asksaveasfilename(
             title="导出模板",
             defaultextension=".json",
@@ -725,11 +719,11 @@ class MainWindow(ttk.Frame):
         if not export_path:
             return
         try:
-            self._template_io.export_templates(export_path, templates)
+            self._template_io.export_templates(export_path, self._templates)
         except OSError as error:
             messagebox.showerror("导出失败", str(error), parent=self.winfo_toplevel())
             return
-        messagebox.showinfo("已导出模板", f"已导出 {len(templates)} 个模板到\n{export_path}", parent=self.winfo_toplevel())
+        messagebox.showinfo("已导出模板", f"已导出 {len(self._templates)} 个模板。", parent=self.winfo_toplevel())
 
     def _import_templates(self) -> None:
         """Select and import valid portable templates into the local library."""
@@ -742,56 +736,32 @@ class MainWindow(ttk.Frame):
             return
         try:
             available_templates = self._template_io.import_templates(import_path)
-        except TemplateFileError as error:
+        except (TemplateFileError, OSError) as error:
             messagebox.showerror("导入失败", str(error), parent=self.winfo_toplevel())
             return
-        selected_templates = TemplateSelectionDialog.ask(self, "导入模板", available_templates)
-        if not selected_templates:
-            return
-        imported_count = self._import_selected_templates(selected_templates)
+        imported_count = self._import_all_templates(available_templates)
         self._refresh_template_choices()
         messagebox.showinfo("已导入模板", f"已导入 {imported_count} 个模板。", parent=self.winfo_toplevel())
 
-    def _import_selected_templates(self, templates: list[InvoiceTemplate]) -> int:
-        """Persist selected templates while applying the user's conflict choices."""
+    def _import_all_templates(self, templates: list[InvoiceTemplate]) -> int:
+        """Import every template using one all-or-nothing conflict choice."""
+        has_conflicts = any(self._template_conflicts(template) for template in templates)
+        overwrite = not has_conflicts or messagebox.askyesno(
+            "模板冲突",
+            "发现同名或同 PLMN 的本机模板。\n\n选择“是”全部覆盖，选择“否”全部跳过冲突模板。",
+            parent=self.winfo_toplevel(),
+        )
         imported_count = 0
-        conflict_policy = ""
         for template in templates:
             conflicts = self._template_conflicts(template)
-            action = self._resolve_template_import_conflict(template, conflicts, conflict_policy)
-            if action is None:
-                break
-            if action in ("skip", "skip_all"):
-                if action == "skip_all":
-                    conflict_policy = "skip"
+            if conflicts and not overwrite:
                 continue
-            if action == "keep_both":
-                template = self._renamed_import_template(template)
-            if action in ("overwrite", "overwrite_all"):
+            if conflicts:
                 self._delete_template_conflicts(conflicts)
             self._template_repository.save(template)
             self._templates.append(template)
             imported_count += 1
-            if action == "overwrite_all":
-                conflict_policy = "overwrite"
         return imported_count
-
-    def _resolve_template_import_conflict(
-        self,
-        template: InvoiceTemplate,
-        conflicts: list[InvoiceTemplate],
-        conflict_policy: str,
-    ) -> str | None:
-        if not conflicts:
-            return "keep"
-        if conflict_policy:
-            return conflict_policy
-        action = TemplateConflictDialog.ask(self, template)
-        if action == "overwrite_all":
-            return "overwrite_all"
-        if action == "skip_all":
-            return "skip_all"
-        return action
 
     def _template_conflicts(self, template: InvoiceTemplate) -> list[InvoiceTemplate]:
         """Find local templates sharing an ID, name, or non-empty PLMN."""
@@ -809,17 +779,6 @@ class MainWindow(ttk.Frame):
             self._template_repository.delete(template.template_id)
         conflict_ids = {template.template_id for template in conflicts}
         self._templates = [template for template in self._templates if template.template_id not in conflict_ids]
-
-    def _renamed_import_template(self, template: InvoiceTemplate) -> InvoiceTemplate:
-        """Give a kept import a unique ID and display name."""
-        names = {current.display_name for current in self._templates}
-        base_name = f"{template.display_name} (导入)"
-        display_name = base_name
-        suffix = 2
-        while display_name in names:
-            display_name = f"{base_name} {suffix}"
-            suffix += 1
-        return replace(template, template_id=uuid4().hex, display_name=display_name)
 
     def _refresh_template_choices(self) -> None:
         """Synchronize the template editor after local library changes."""

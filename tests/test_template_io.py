@@ -1,13 +1,11 @@
 """Tests for portable template JSON files."""
 
 import json
-from dataclasses import replace
 
 import pytest
 
 from invoice_reader.templates.template_io import TemplateFileError, TemplateIo
 from invoice_reader.templates.template_models import InvoiceTemplate, create_template_field
-from invoice_reader.ui.main_window import MainWindow
 
 
 def _template() -> InvoiceTemplate:
@@ -51,15 +49,3 @@ def test_rejects_invalid_exchange_file(tmp_path) -> None:
 
     with pytest.raises(TemplateFileError):
         TemplateIo().import_templates(str(exchange_path))
-
-
-def test_keep_both_renames_an_imported_conflicting_template() -> None:
-    window = object.__new__(MainWindow)
-    window._templates = [_template()]
-    imported = replace(_template(), optional_keywords=["new"])
-
-    assert MainWindow._template_conflicts(window, imported) == [_template()]
-    renamed = MainWindow._renamed_import_template(window, imported)
-
-    assert renamed.template_id != imported.template_id
-    assert renamed.display_name == "ABCDE (导入)"

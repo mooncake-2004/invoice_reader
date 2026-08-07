@@ -31,13 +31,15 @@ class TemplateIo:
         try:
             payload = json.loads(Path(path).read_text(encoding="utf-8"))
             return self._templates_from_payload(payload)
-        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
-            raise TemplateFileError("文件无效或损坏。") from error
+        except OSError:
+            raise
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+            raise TemplateFileError("文件无效") from error
 
     def _templates_from_payload(self, payload: object) -> list[InvoiceTemplate]:
         if not isinstance(payload, dict) or payload.get("format_version") != self._FORMAT_VERSION:
-            raise TemplateFileError("文件无效或损坏。")
+            raise TemplateFileError("文件无效")
         template_data = payload.get("templates")
         if not isinstance(template_data, list) or not all(isinstance(entry, dict) for entry in template_data):
-            raise TemplateFileError("文件无效或损坏。")
+            raise TemplateFileError("文件无效")
         return [InvoiceTemplate.from_mapping(entry) for entry in template_data]
