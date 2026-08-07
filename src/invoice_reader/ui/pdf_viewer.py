@@ -24,6 +24,15 @@ class FieldOverlay:
     rectangle_id: int
 
 
+@dataclass
+class ReselectionRequest:
+    """One current-invoice field replacement bound to an opened PDF session."""
+
+    session_id: int
+    field_name: str
+    completed: bool = False
+
+
 class PdfViewer(ttk.Frame):
     """Display a PDF and retain four normalized field locations across pages."""
 
@@ -36,8 +45,8 @@ class PdfViewer(ttk.Frame):
         self,
         master: tk.Misc,
         on_fields_changed: Callable[[dict[str, str]], None],
-        on_pdf_opened: Callable[[PdfService], None],
-        on_field_reselected: Callable[[str, TemplateField], None],
+        on_pdf_opened: Callable[[PdfService, int], None],
+        on_field_reselected: Callable[[int, str, TemplateField], None],
     ) -> None:
         super().__init__(master)
         self._service = PdfService()
@@ -52,7 +61,8 @@ class PdfViewer(ttk.Frame):
         self._page_height = 0
         self._image: ImageTk.PhotoImage | None = None
         self._active_field = FIELD_NAMES[0]
-        self._one_time_field: str | None = None
+        self._session_id = 0
+        self._reselection_request: ReselectionRequest | None = None
         self._selected_field: str | None = None
         self._drawing_overlay: FieldOverlay | None = None
         self._selection_start: tuple[float, float] | None = None
@@ -68,10 +78,17 @@ class PdfViewer(ttk.Frame):
         """Choose which of the four fields the next drag will replace."""
         self._active_field = field_name
 
-    def start_field_reselection(self, field_name: str) -> None:
+    @property
+    def session_id(self) -> int:
+        """Return the monotonically increasing identifier of the opened PDF."""
+        return self._session_id
+
+    def start_field_reselection(self, field_name: str, session_id: int) -> None:
         """Make the next completed box a current-invoice field replacement."""
+        if session_id != self._session_id:
+            return
         self._active_field = field_name
-        self._one_time_field = field_name
+        self._reselection_request = ReselectionRequest(session_id, field_name)
 
     def field_locations(self) -> dict[str, TemplateField]:
         """Return the current four field locations for template compilation."""
@@ -101,7 +118,6 @@ class PdfViewer(ttk.Frame):
         self._drawing_overlay = None
         self._selection_start = None
         self._selected_field = None
-        self._one_time_field = None
         self._status.set("已关闭当前 PDF，请打开下一张。")
 
     def apply_template_fields(self, fields: dict[str, TemplateField]) -> None:
@@ -109,7 +125,6 @@ class PdfViewer(ttk.Frame):
         self._field_locations = dict(fields)
         self._field_texts.clear()
         self._selected_field = None
-        self._one_time_field = None
         if self._service.page_count:
             self._render_page()
 
@@ -186,6 +201,7 @@ class PdfViewer(ttk.Frame):
         self._canvas.bind("<MouseWheel>", self._mouse_wheel)
         self._canvas.bind("<Shift-MouseWheel>", self._shift_mouse_wheel)
         self._canvas.bind("<Delete>", self._delete_selected_field)
+        self._canvas.bind("<Escape>", self._cancel_selection)
 
     def _open_pdf(self) -> None:
         path = filedialog.askopenfilename(
@@ -211,13 +227,14 @@ class PdfViewer(ttk.Frame):
 
         self._page_index = 0
         self._zoom = 1.0
+        self._session_id += 1
         self._field_locations.clear()
         self._field_texts.clear()
         self._selected_field = None
-        self._one_time_field = None
+        self._reselection_request = None
         self._render_page()
         self._notify_fields_changed()
-        self._on_pdf_opened(self._service)
+        self._on_pdf_opened(self._service, self._session_id)
         return True
 
     def _change_page(self, direction: int, show_bottom: bool = False) -> None:
@@ -330,12 +347,13 @@ class PdfViewer(ttk.Frame):
             return
         self._canvas.focus_set()
         point = self._canvas_point(event)
-        if self._one_time_field is not None:
-            self._remove_field(self._one_time_field)
-            self._selected_field = self._one_time_field
-            self._drawing_overlay = self._create_overlay(self._one_time_field, *point, *point)
+        request = self._reselection_request
+        if request is not None and not request.completed and request.session_id == self._session_id:
+            self._remove_field(request.field_name)
+            self._selected_field = request.field_name
+            self._drawing_overlay = self._create_overlay(request.field_name, *point, *point)
             self._selection_start = point
-            self._field_texts[self._one_time_field] = ""
+            self._field_texts[request.field_name] = ""
             self._notify_fields_changed()
             return
         selected_field = self._field_at(point)
@@ -389,9 +407,27 @@ class PdfViewer(ttk.Frame):
         )
         self._field_locations[overlay.field_name] = field
         self._update_field_text(overlay)
-        if self._one_time_field == overlay.field_name:
-            self._one_time_field = None
-            self._on_field_reselected(overlay.field_name, field)
+        request = self._reselection_request
+        if (
+            request is not None
+            and not request.completed
+            and request.session_id == self._session_id
+            and request.field_name == overlay.field_name
+        ):
+            request.completed = True
+            self._on_field_reselected(request.session_id, overlay.field_name, field)
+
+    def _cancel_selection(self, _event: tk.Event) -> str:
+        """Cancel the in-progress one-off selection for the current PDF session."""
+        if self._drawing_overlay is not None:
+            self._canvas.delete(self._drawing_overlay.rectangle_id)
+            self._overlays.pop(self._drawing_overlay.field_name, None)
+        self._drawing_overlay = None
+        self._selection_start = None
+        self._reselection_request = None
+        self._cancel_scheduled_text_update()
+        self._notify_fields_changed()
+        return "break"
 
     def _schedule_selection_text_update(self) -> None:
         if self._selection_after_id is None:

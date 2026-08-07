@@ -13,6 +13,7 @@ class _ResolutionWindow:
         self._template_editor = SimpleNamespace(set_status=lambda value: setattr(self, "status", value))
         self.statuses: list[tuple[str, QueueStatus]] = []
         self.continued_with = ""
+        self._current_session_id = 7
 
     def _queue_status_path(self) -> str:
         return "source.pdf"
@@ -23,7 +24,10 @@ class _ResolutionWindow:
     def winfo_toplevel(self) -> object:
         return object()
 
-    def _continue_with_plmn(self, _service: object, plmn: str) -> None:
+    def _is_current_session(self, session_id: int) -> bool:
+        return session_id == self._current_session_id
+
+    def _continue_with_plmn(self, _service: object, plmn: str, _session_id: int) -> None:
         self.continued_with = plmn
 
 
@@ -36,7 +40,7 @@ def test_unparsed_plmn_pauses_the_current_queue_item(monkeypatch) -> None:
         lambda _parent, callback: callbacks.append(callback),
     )
 
-    MainWindow._pause_for_unparsed_plmn(window, object(), object())
+    MainWindow._pause_for_unparsed_plmn(window, object(), object(), 7)
 
     assert window.statuses == [("source.pdf", QueueStatus.NO_TEMPLATE)]
     assert window.status == "文件名未解析出 PLMN：请处理当前发票后再继续。"
@@ -47,6 +51,15 @@ def test_manual_plmn_callback_resumes_matching(monkeypatch) -> None:
     window = _ResolutionWindow()
     monkeypatch.setattr(main_window.simpledialog, "askstring", lambda *_args, **_kwargs: "ABCDE")
 
-    MainWindow._handle_unparsed_plmn_action(window, object(), object(), "manual")
+    MainWindow._handle_unparsed_plmn_action(window, object(), object(), 7, "manual")
 
     assert window.continued_with == "ABCDE"
+
+
+def test_stale_plmn_callback_is_ignored(monkeypatch) -> None:
+    window = _ResolutionWindow()
+    monkeypatch.setattr(main_window.simpledialog, "askstring", lambda *_args, **_kwargs: "ABCDE")
+
+    MainWindow._handle_unparsed_plmn_action(window, object(), object(), 6, "manual")
+
+    assert window.continued_with == ""

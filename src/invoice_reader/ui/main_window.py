@@ -61,6 +61,7 @@ class MainWindow(ttk.Frame):
         self._current_plmn = ""
         self._current_pdf_path = ""
         self._current_queue_path = ""
+        self._current_session_id = 0
         self._record: InvoiceRecord | None = None
         self._current_template: InvoiceTemplate | None = None
         self._template_repository = TemplateRepository()
@@ -263,8 +264,13 @@ class MainWindow(ttk.Frame):
         item = self._batch_queue.get(self._current_queue_path)
         return item is not None and str(pdf_path) in (item.file_path, item.archive_path)
 
-    def _match_template(self, service: PdfService) -> None:
+    def _is_current_session(self, session_id: int) -> bool:
+        """Return whether a callback still belongs to the displayed PDF."""
+        return session_id == self._current_session_id
+
+    def _match_template(self, service: PdfService, session_id: int) -> None:
         """Parse the PDF filename PLMN and apply its local template directly."""
+        self._current_session_id = session_id
         self._current_pdf_path = str(service.path)
         if not self._queue_item_matches_path(service.path):
             self._current_queue_path = ""
@@ -280,28 +286,36 @@ class MainWindow(ttk.Frame):
         parser = FilenameParser(self._settings_repository.load_filename_patterns())
         self._current_plmn = parser.parse(service.path.name)
         if not self._current_plmn:
-            self._pause_for_unparsed_plmn(service, parser)
+            self._pause_for_unparsed_plmn(service, parser, session_id)
             return
-        self._continue_template_match(service)
+        self._continue_template_match(service, session_id)
 
-    def _pause_for_unparsed_plmn(self, service: PdfService, parser: FilenameParser) -> None:
+    def _pause_for_unparsed_plmn(
+        self,
+        service: PdfService,
+        parser: FilenameParser,
+        session_id: int,
+    ) -> None:
         """Stop the queue on this PDF and show the main-thread PLMN dialog."""
+        if not self._is_current_session(session_id):
+            return
         self._template_section.set_summary("无模板")
         self._set_queue_status(self._queue_status_path(), QueueStatus.NO_TEMPLATE)
         self._template_editor.set_status("文件名未解析出 PLMN：请处理当前发票后再继续。")
         PlmnResolutionDialog.show(
             self,
-            lambda action: self._handle_unparsed_plmn_action(service, parser, action),
+            lambda action: self._handle_unparsed_plmn_action(service, parser, session_id, action),
         )
 
     def _handle_unparsed_plmn_action(
         self,
         service: PdfService,
         parser: FilenameParser,
+        session_id: int,
         action: str | None,
     ) -> None:
         """Continue a paused PLMN resolution after its dialog closes."""
-        if action is None:
+        if action is None or not self._is_current_session(session_id):
             return
         if action == "manual":
             plmn = simpledialog.askstring(
@@ -310,12 +324,19 @@ class MainWindow(ttk.Frame):
                 parent=self.winfo_toplevel(),
             )
             if plmn and plmn.strip():
-                self._continue_with_plmn(service, plmn.strip())
+                self._continue_with_plmn(service, plmn.strip(), session_id)
             return
-        self._rename_for_unparsed_plmn(service, parser)
+        self._rename_for_unparsed_plmn(service, parser, session_id)
 
-    def _rename_for_unparsed_plmn(self, service: PdfService, parser: FilenameParser) -> None:
+    def _rename_for_unparsed_plmn(
+        self,
+        service: PdfService,
+        parser: FilenameParser,
+        session_id: int,
+    ) -> None:
         """Rename the current PDF once, then parse its new filename."""
+        if not self._is_current_session(session_id):
+            return
         filename = simpledialog.askstring(
             "重命名 PDF 文件",
             "请输入新的文件名：",
@@ -326,29 +347,33 @@ class MainWindow(ttk.Frame):
             return
         if not filename.strip():
             messagebox.showwarning("文件名不能为空", "请输入新的 PDF 文件名。", parent=self.winfo_toplevel())
-            self._pause_for_unparsed_plmn(service, parser)
+            self._pause_for_unparsed_plmn(service, parser, session_id)
             return
         try:
             service.rename_current(filename.strip())
         except OSError as error:
             messagebox.showerror("无法重命名文件", str(error), parent=self.winfo_toplevel())
-            self._pause_for_unparsed_plmn(service, parser)
+            self._pause_for_unparsed_plmn(service, parser, session_id)
             return
         self._current_pdf_path = str(service.path)
         plmn = parser.parse(service.path.name)
         if plmn:
-            self._continue_with_plmn(service, plmn)
+            self._continue_with_plmn(service, plmn, session_id)
             return
         messagebox.showwarning("仍无法解析 PLMN", "重命名后仍无法从文件名解析 PLMN。", parent=self.winfo_toplevel())
-        self._pause_for_unparsed_plmn(service, parser)
+        self._pause_for_unparsed_plmn(service, parser, session_id)
 
-    def _continue_with_plmn(self, service: PdfService, plmn: str) -> None:
+    def _continue_with_plmn(self, service: PdfService, plmn: str, session_id: int) -> None:
         """Resume template matching after a user supplied a PLMN."""
+        if not self._is_current_session(session_id):
+            return
         self._current_plmn = plmn
-        self._continue_template_match(service)
+        self._continue_template_match(service, session_id)
 
-    def _continue_template_match(self, service: PdfService) -> None:
+    def _continue_template_match(self, service: PdfService, session_id: int) -> None:
         """Match and extract after the current PDF has a usable PLMN."""
+        if not self._is_current_session(session_id):
+            return
         self._plmn_section.set_summary(f"PLMN: {self._current_plmn}")
         template = self._template_matcher.match(self._templates, self._current_plmn)
         if template is None:
@@ -418,12 +443,12 @@ class MainWindow(ttk.Frame):
         """Make the next PDF box replace one field on this invoice only."""
         if self._record is None:
             return
-        self._viewer.start_field_reselection(field_name)
+        self._viewer.start_field_reselection(field_name, self._current_session_id)
         self._template_editor.set_status(f"请在 PDF 上重新框选 {field_name}。")
 
-    def _field_reselected(self, field_name: str, field: TemplateField) -> None:
+    def _field_reselected(self, session_id: int, field_name: str, field: TemplateField) -> None:
         """Extract a one-off current-invoice field from a newly drawn box."""
-        if self._record is None:
+        if not self._is_current_session(session_id) or self._record is None:
             return
         extracted_field = self._invoice2data_adapter.extract_field(
             self._current_pdf_path,
