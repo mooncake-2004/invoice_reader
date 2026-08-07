@@ -7,6 +7,7 @@ from tempfile import NamedTemporaryFile
 from openpyxl import Workbook, load_workbook
 
 from invoice_reader.application.models import InvoiceRecord
+from invoice_reader.application.sdr_amount import parse_sdr_amount
 from invoice_reader.excel.excel_errors import DuplicatePlmnError, ExcelHeaderError, ExcelLockedError
 
 
@@ -49,10 +50,12 @@ class ExcelService:
             values = self._record_values(record, approved_at)
             if row_number is None:
                 worksheet.append(values)
+                row_number = worksheet.max_row
             elif overwrite:
                 self._replace_row(worksheet, row_number, values)
             else:
                 raise DuplicatePlmnError(self._row_values(worksheet, row_number))
+            self._format_record_cells(worksheet, row_number)
             self._save_atomically(workbook, Path(excel_path))
         finally:
             workbook.close()
@@ -84,17 +87,30 @@ class ExcelService:
                 return row_number
         return None
 
-    def _record_values(self, record: InvoiceRecord, approved_at: str) -> tuple[str, ...]:
+    def _record_values(self, record: InvoiceRecord, approved_at: str) -> tuple[object, ...]:
         return (
             record.plmn.value,
             record.invoice_no.value,
-            record.sdr_amount.value,
-            record.tap_start.value,
-            record.tap_end.value,
+            parse_sdr_amount(record.sdr_amount.value),
+            self._tap_number(record.tap_start.value),
+            self._tap_number(record.tap_end.value),
             approved_at,
         )
 
-    def _replace_row(self, worksheet: object, row_number: int, values: tuple[str, ...]) -> None:
+    def _tap_number(self, value: str) -> int | str:
+        stripped_value = value.strip()
+        if not stripped_value:
+            return ""
+        if not stripped_value.isdecimal():
+            raise ValueError(f"TAP 不是有效整数：{value}")
+        return int(stripped_value)
+
+    def _format_record_cells(self, worksheet: object, row_number: int) -> None:
+        for column_number in (2, 4, 5):
+            worksheet.cell(row=row_number, column=column_number).number_format = "General"
+        worksheet.cell(row=row_number, column=3).number_format = "0.00"
+
+    def _replace_row(self, worksheet: object, row_number: int, values: tuple[object, ...]) -> None:
         for column_number, value in enumerate(values, start=1):
             worksheet.cell(row=row_number, column=column_number).value = value
 

@@ -14,6 +14,7 @@ from invoice_reader.application.models import (
     ValidationStatus,
 )
 from invoice_reader.application.job_state import InvoiceStatus
+from invoice_reader.application.sdr_amount import normalize_sdr_amount
 from invoice_reader.templates.template_compiler import TemplateCompiler
 from invoice_reader.templates.template_models import InvoiceTemplate, TemplateField
 
@@ -111,11 +112,22 @@ class Invoice2DataAdapter:
         )
 
     def _result_field(self, result: dict[str, object], field_name: str) -> ExtractedField:
-        value = str(result.get(field_name, "")).strip()
+        original_value = str(result.get(field_name, "")).strip()
+        value, is_valid = self._structured_value(field_name, original_value)
         return ExtractedField(
             value=value,
-            original_value=value,
+            original_value=original_value,
             source=FieldSource.TEXT,
-            validation_status=ValidationStatus.VALID if value else ValidationStatus.INVALID,
-            confidence=1.0 if value else 0.0,
+            validation_status=ValidationStatus.VALID if is_valid else ValidationStatus.INVALID,
+            confidence=1.0 if is_valid else 0.0,
         )
+
+    def _structured_value(self, field_name: str, original_value: str) -> tuple[str, bool]:
+        if not original_value:
+            return "", False
+        if field_name != "sdr_amount":
+            return original_value, True
+        try:
+            return normalize_sdr_amount(original_value), True
+        except ValueError:
+            return original_value, False

@@ -19,6 +19,15 @@ def _record(plmn: str = "ABCDE") -> InvoiceRecord:
     )
 
 
+def _cell(excel_path, cell_reference: str):
+    workbook = load_workbook(excel_path, data_only=True)
+    try:
+        cell = workbook.active[cell_reference]
+        return cell.value, cell.number_format
+    finally:
+        workbook.close()
+
+
 def _rows(excel_path) -> list[tuple[object, ...]]:
     workbook = load_workbook(excel_path, data_only=True)
     try:
@@ -61,7 +70,7 @@ def test_appends_then_overwrites_an_exact_plmn_row(tmp_path) -> None:
 
     assert _rows(excel_path) == [
         EXCEL_HEADERS,
-        ("ABCDE", "INV-2002", "321.45", "100", "200", "2026-08-06T11:00:00+08:00"),
+        ("ABCDE", "INV-2002", 321.45, 100, 200, "2026-08-06T11:00:00+08:00"),
     ]
 
 
@@ -79,3 +88,36 @@ def test_finds_an_existing_exact_plmn_row(tmp_path) -> None:
         "200",
         "2026-08-06T10:00:00+08:00",
     )
+
+
+def test_writes_decimal_comma_sdr_as_a_numeric_excel_cell(tmp_path) -> None:
+    excel_path = tmp_path / "2026-08.xlsx"
+    service = ExcelService()
+    service.create_monthly_workbook(str(excel_path))
+    record = _record()
+    record.sdr_amount.value = "0,23"
+
+    service.write_record(str(excel_path), record, "2026-08-06T10:00:00+08:00")
+
+    value, number_format = _cell(excel_path, "C2")
+    assert value == 0.23
+    assert isinstance(value, float)
+    assert number_format == "0.00"
+
+
+def test_writes_invoice_number_and_tap_cells_with_general_format(tmp_path) -> None:
+    excel_path = tmp_path / "2026-08.xlsx"
+    service = ExcelService()
+    service.create_monthly_workbook(str(excel_path))
+    record = _record()
+    record.tap_start.value = "06338"
+    record.tap_end.value = "06397"
+
+    service.write_record(str(excel_path), record, "2026-08-06T10:00:00+08:00")
+
+    invoice_number, invoice_format = _cell(excel_path, "B2")
+    tap_start, tap_start_format = _cell(excel_path, "D2")
+    tap_end, tap_end_format = _cell(excel_path, "E2")
+    assert (invoice_number, invoice_format) == ("INV-1001", "General")
+    assert (tap_start, tap_start_format) == (6338, "General")
+    assert (tap_end, tap_end_format) == (6397, "General")

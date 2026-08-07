@@ -33,11 +33,11 @@ def _template() -> InvoiceTemplate:
     )
 
 
-def _pdf(path: str) -> None:
+def _pdf(path: str, sdr_amount: str = "321.45") -> None:
     document = fitz.open()
     page = document.new_page(width=600, height=800)
     page.insert_text((50, 80), "INV-1001")
-    page.insert_text((50, 200), "321.45")
+    page.insert_text((50, 200), sdr_amount)
     page.insert_text((50, 320), "100")
     page.insert_text((50, 440), "200")
     document.save(path)
@@ -100,3 +100,18 @@ def test_extracts_one_current_invoice_field_without_changing_template(tmp_path) 
     assert field.value == "200"
     assert field.source == FieldSource.TEXT
     assert template.fields["tap_end"].bbox_normalized == (0.05, 0.50, 0.45, 0.60)
+
+
+def test_normalizes_decimal_comma_for_approval_and_preserves_original(tmp_path) -> None:
+    pdf_path = tmp_path / "ABCDE_invoice.pdf"
+    _pdf(str(pdf_path), "0,23")
+
+    record = Invoice2DataAdapter(TemplateCompiler(0.02)).extract(
+        str(pdf_path),
+        _template(),
+        "ABCDE",
+    )
+
+    assert record.sdr_amount.value == "0.23"
+    assert record.sdr_amount.original_value == "0,23"
+    assert record.sdr_amount.validation_status == ValidationStatus.VALID
