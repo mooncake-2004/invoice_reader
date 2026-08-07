@@ -651,7 +651,7 @@ class MainWindow(ttk.Frame):
         return self._settings_repository.load_archive_directory()
 
     def _show_existing_approval_notice(self) -> None:
-        if self._approval_repository.find_by_pdf_path(self._current_pdf_path) is not None:
+        if self._approval_repository.find_completed_by_pdf_path(self._current_pdf_path) is not None:
             messagebox.showinfo("已审批过", "这张 PDF 已审批过。", parent=self.winfo_toplevel())
 
     def _empty_template_record(self) -> InvoiceRecord:
