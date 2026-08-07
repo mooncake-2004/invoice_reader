@@ -229,3 +229,70 @@ def test_manual_plmn_immediately_uses_current_excel_status() -> None:
     assert item.plmn == "ABCDE"
     assert item.status == QueueStatus.COMPLETED
     assert updated_statuses == [QueueStatus.COMPLETED]
+
+
+def test_renaming_source_pdf_replaces_queue_key_and_filename(tmp_path) -> None:
+    old_path = str(tmp_path / "wrong.pdf")
+    new_path = str(tmp_path / "ABCDE_MACHT.pdf")
+    queue = BatchQueue(str(tmp_path), [QueueItem(old_path, QueueStatus.NO_TEMPLATE)])
+
+    renamed_item = queue.rename_disk_path(old_path, old_path, new_path)
+
+    assert queue.get(old_path) is None
+    assert queue.get(new_path) is renamed_item
+    assert renamed_item.file_path == new_path
+    assert renamed_item.filename == "ABCDE_MACHT.pdf"
+
+
+def test_renaming_archived_pdf_updates_displayed_filename(tmp_path) -> None:
+    source_path = str(tmp_path / "source" / "wrong.pdf")
+    old_archive_path = str(tmp_path / "archive" / "wrong.pdf")
+    new_archive_path = str(tmp_path / "archive" / "ABCDE_MACHT.pdf")
+    queue = BatchQueue(
+        str(tmp_path / "source"),
+        [QueueItem(source_path, QueueStatus.COMPLETED, old_archive_path, "ABCDE")],
+    )
+
+    renamed_item = queue.rename_disk_path(source_path, old_archive_path, new_archive_path)
+
+    assert queue.get(source_path) is renamed_item
+    assert renamed_item.archive_path == new_archive_path
+    assert renamed_item.filename == "ABCDE_MACHT.pdf"
+
+
+def test_rescan_merges_retained_old_name_into_new_scanned_path(tmp_path) -> None:
+    old_path = str(tmp_path / "wrong.pdf")
+    new_path = str(tmp_path / "ABCDE_MACHT.pdf")
+    saved_items = {
+        old_path: QueueItem(old_path, QueueStatus.COMPLETED, plmn="ABCDE"),
+    }
+    queue = BatchQueue(str(tmp_path))
+    queue.replace_paths([new_path], saved_items)
+    queue.set_plmn(new_path, "ABCDE")
+
+    queue.merge_renamed_paths({new_path})
+
+    assert queue.get(old_path) is None
+    assert queue.get(new_path).status == QueueStatus.COMPLETED
+    assert queue.get(new_path).plmn == "ABCDE"
+
+
+def test_main_window_updates_current_queue_path_after_rename() -> None:
+    old_path = "C:/invoices/wrong.pdf"
+    new_path = "C:/invoices/ABCDE_MACHT.pdf"
+    queue = BatchQueue("C:/invoices", [QueueItem(old_path, QueueStatus.NO_TEMPLATE)])
+    selected_paths = []
+    window = object.__new__(MainWindow)
+    window._batch_queue = queue
+    window._current_queue_path = old_path
+    window._queue_repository = SimpleNamespace(save=lambda _queue: None)
+    window._queue_panel = SimpleNamespace(
+        set_queue=lambda _queue: None,
+        set_current=lambda path: selected_paths.append(path),
+    )
+
+    MainWindow._update_queue_after_rename(window, old_path, new_path)
+
+    assert window._current_queue_path == new_path
+    assert queue.get(new_path) is not None
+    assert selected_paths == [new_path]

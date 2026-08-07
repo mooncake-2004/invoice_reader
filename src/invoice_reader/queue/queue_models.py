@@ -38,7 +38,7 @@ class QueueItem:
     @property
     def filename(self) -> str:
         """Return the queue-friendly filename."""
-        return Path(self.file_path).name
+        return Path(self.archive_path or self.file_path).name
 
 
 class BatchQueue:
@@ -89,6 +89,34 @@ class BatchQueue:
         item = self._items[file_path]
         item.plmn = plmn
         return item
+
+    def rename_disk_path(self, queue_path: str, old_disk_path: str, new_disk_path: str) -> QueueItem:
+        """Update the queue identity after its source or archived PDF is renamed."""
+        item = self._items.pop(queue_path)
+        if item.file_path == old_disk_path:
+            item.file_path = new_disk_path
+        elif item.archive_path == old_disk_path:
+            item.archive_path = new_disk_path
+        else:
+            self._items[queue_path] = item
+            raise ValueError("重命名的 PDF 路径与当前队列项目不一致。")
+        self._items[item.file_path] = item
+        return item
+
+    def merge_renamed_paths(self, scanned_paths: set[str]) -> None:
+        """Merge a retained old-name item into its uniquely matching scanned PLMN."""
+        scanned_by_plmn: dict[str, list[QueueItem]] = {}
+        for path in scanned_paths:
+            item = self._items.get(path)
+            if item is not None and item.plmn:
+                scanned_by_plmn.setdefault(item.plmn, []).append(item)
+        for old_path, old_item in list(self._items.items()):
+            matches = scanned_by_plmn.get(old_item.plmn, [])
+            if old_path in scanned_paths or len(matches) != 1:
+                continue
+            scanned_item = matches[0]
+            scanned_item.status = old_item.status
+            del self._items[old_path]
 
     def reconcile_completed(self, completed_plmns: set[str]) -> list[QueueItem]:
         """Make completed status reflect only PLMNs found in the current Excel file."""

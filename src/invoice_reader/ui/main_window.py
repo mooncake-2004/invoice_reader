@@ -195,6 +195,7 @@ class MainWindow(ttk.Frame):
         self._batch_queue = BatchQueue(directory)
         self._batch_queue.replace_paths(paths, saved_items)
         self._populate_queue_plmns()
+        self._batch_queue.merge_renamed_paths(set(paths))
         self._reconcile_queue_with_excel()
         self._queue_repository.save(self._batch_queue)
         self._queue_panel.set_queue(self._batch_queue)
@@ -267,6 +268,19 @@ class MainWindow(ttk.Frame):
         self._queue_repository.save(self._batch_queue)
         for changed_item in changed_items:
             self._queue_panel.update_item(changed_item)
+
+    def _update_queue_after_rename(self, old_disk_path: str, new_disk_path: str) -> None:
+        if self._batch_queue.get(self._current_queue_path) is None:
+            return
+        updated_item = self._batch_queue.rename_disk_path(
+            self._current_queue_path,
+            old_disk_path,
+            new_disk_path,
+        )
+        self._current_queue_path = updated_item.file_path
+        self._queue_repository.save(self._batch_queue)
+        self._queue_panel.set_queue(self._batch_queue)
+        self._queue_panel.set_current(self._current_queue_path)
 
     def _populate_queue_plmns(self) -> None:
         parser = FilenameParser(self._settings_repository.load_filename_patterns())
@@ -398,12 +412,14 @@ class MainWindow(ttk.Frame):
             messagebox.showwarning("文件名不能为空", "请输入新的 PDF 文件名。", parent=self.winfo_toplevel())
             self._pause_for_unparsed_plmn(service, parser, session_id)
             return
+        old_disk_path = str(service.path)
         try:
             service.rename_current(filename.strip())
         except OSError as error:
             messagebox.showerror("无法重命名文件", str(error), parent=self.winfo_toplevel())
             self._pause_for_unparsed_plmn(service, parser, session_id)
             return
+        self._update_queue_after_rename(old_disk_path, str(service.path))
         self._current_pdf_path = str(service.path)
         plmn = parser.parse(service.path.name)
         if plmn:
