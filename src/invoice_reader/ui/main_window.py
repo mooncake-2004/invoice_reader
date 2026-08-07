@@ -1,11 +1,13 @@
 """Main application layout."""
 
 from datetime import datetime
+from dataclasses import replace
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Thread
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
+from uuid import uuid4
 
 from invoice_reader.archive.archive_errors import ArchiveConflictError, ArchiveError
 from invoice_reader.archive.archive_service import ArchiveService
@@ -25,6 +27,7 @@ from invoice_reader.services.filename_parser import FilenameParser
 from invoice_reader.templates.template_compiler import TemplateCompiler
 from invoice_reader.templates.template_matcher import TemplateMatcher
 from invoice_reader.templates.template_models import InvoiceTemplate, TemplateField
+from invoice_reader.templates.template_io import TemplateFileError, TemplateIo
 from invoice_reader.templates.template_repository import TemplateRepository
 from invoice_reader.ui.filename_parser_panel import FilenameParserPanel
 from invoice_reader.ui.pdf_viewer import PdfViewer
@@ -34,6 +37,7 @@ from invoice_reader.ui.archive_panel import ArchivePanel
 from invoice_reader.ui.archive_conflict_dialog import ArchiveConflictDialog
 from invoice_reader.ui.excel_panel import ExcelPanel
 from invoice_reader.ui.template_editor import TemplateEditor
+from invoice_reader.ui.template_exchange_dialogs import TemplateConflictDialog, TemplateSelectionDialog
 from invoice_reader.ui.batch_queue_panel import BatchQueuePanel
 from invoice_reader.ui.collapsible_panel import CollapsiblePanel
 
@@ -63,6 +67,7 @@ class MainWindow(ttk.Frame):
         self._record: InvoiceRecord | None = None
         self._current_template: InvoiceTemplate | None = None
         self._template_repository = TemplateRepository()
+        self._template_io = TemplateIo()
         self._templates = self._template_repository.load_all()
         self._templates_by_id = {template.template_id: template for template in self._templates}
         self._template_compiler = TemplateCompiler(defaults.page_size_tolerance)
@@ -104,6 +109,8 @@ class MainWindow(ttk.Frame):
             on_template_applied=self._apply_template,
             on_template_saved=self._save_template,
             on_template_deleted=self._delete_template,
+            on_templates_imported=self._import_templates,
+            on_templates_exported=self._export_templates,
         )
         self._template_editor.configure(text="")
         self._template_editor.pack(fill="x")
@@ -700,6 +707,124 @@ class MainWindow(ttk.Frame):
         self._apply_template(template.template_id)
         self._refresh_template_save_action()
         self._template_editor.set_status(f"已保存模板，关联 PLMN: {template.plmn}")
+
+    def _export_templates(self) -> None:
+        """Export selected local templates as one portable JSON file."""
+        if not self._templates:
+            messagebox.showinfo("没有模板", "当前没有可导出的模板。", parent=self.winfo_toplevel())
+            return
+        templates = TemplateSelectionDialog.ask(self, "导出模板", self._templates)
+        if not templates:
+            return
+        export_path = filedialog.asksaveasfilename(
+            title="导出模板",
+            defaultextension=".json",
+            filetypes=[("JSON 文件", "*.json")],
+            parent=self.winfo_toplevel(),
+        )
+        if not export_path:
+            return
+        try:
+            self._template_io.export_templates(export_path, templates)
+        except OSError as error:
+            messagebox.showerror("导出失败", str(error), parent=self.winfo_toplevel())
+            return
+        messagebox.showinfo("已导出模板", f"已导出 {len(templates)} 个模板到\n{export_path}", parent=self.winfo_toplevel())
+
+    def _import_templates(self) -> None:
+        """Select and import valid portable templates into the local library."""
+        import_path = filedialog.askopenfilename(
+            title="导入模板",
+            filetypes=[("JSON 文件", "*.json")],
+            parent=self.winfo_toplevel(),
+        )
+        if not import_path:
+            return
+        try:
+            available_templates = self._template_io.import_templates(import_path)
+        except TemplateFileError as error:
+            messagebox.showerror("导入失败", str(error), parent=self.winfo_toplevel())
+            return
+        selected_templates = TemplateSelectionDialog.ask(self, "导入模板", available_templates)
+        if not selected_templates:
+            return
+        imported_count = self._import_selected_templates(selected_templates)
+        self._refresh_template_choices()
+        messagebox.showinfo("已导入模板", f"已导入 {imported_count} 个模板。", parent=self.winfo_toplevel())
+
+    def _import_selected_templates(self, templates: list[InvoiceTemplate]) -> int:
+        """Persist selected templates while applying the user's conflict choices."""
+        imported_count = 0
+        conflict_policy = ""
+        for template in templates:
+            conflicts = self._template_conflicts(template)
+            action = self._resolve_template_import_conflict(template, conflicts, conflict_policy)
+            if action is None:
+                break
+            if action in ("skip", "skip_all"):
+                if action == "skip_all":
+                    conflict_policy = "skip"
+                continue
+            if action == "keep_both":
+                template = self._renamed_import_template(template)
+            if action in ("overwrite", "overwrite_all"):
+                self._delete_template_conflicts(conflicts)
+            self._template_repository.save(template)
+            self._templates.append(template)
+            imported_count += 1
+            if action == "overwrite_all":
+                conflict_policy = "overwrite"
+        return imported_count
+
+    def _resolve_template_import_conflict(
+        self,
+        template: InvoiceTemplate,
+        conflicts: list[InvoiceTemplate],
+        conflict_policy: str,
+    ) -> str | None:
+        if not conflicts:
+            return "keep"
+        if conflict_policy:
+            return conflict_policy
+        action = TemplateConflictDialog.ask(self, template)
+        if action == "overwrite_all":
+            return "overwrite_all"
+        if action == "skip_all":
+            return "skip_all"
+        return action
+
+    def _template_conflicts(self, template: InvoiceTemplate) -> list[InvoiceTemplate]:
+        """Find local templates sharing an ID, name, or non-empty PLMN."""
+        return [
+            current
+            for current in self._templates
+            if current.template_id == template.template_id
+            or current.display_name == template.display_name
+            or (template.plmn and current.plmn == template.plmn)
+        ]
+
+    def _delete_template_conflicts(self, conflicts: list[InvoiceTemplate]) -> None:
+        """Remove every local template superseded by an imported template."""
+        for template in conflicts:
+            self._template_repository.delete(template.template_id)
+        conflict_ids = {template.template_id for template in conflicts}
+        self._templates = [template for template in self._templates if template.template_id not in conflict_ids]
+
+    def _renamed_import_template(self, template: InvoiceTemplate) -> InvoiceTemplate:
+        """Give a kept import a unique ID and display name."""
+        names = {current.display_name for current in self._templates}
+        base_name = f"{template.display_name} (导入)"
+        display_name = base_name
+        suffix = 2
+        while display_name in names:
+            display_name = f"{base_name} {suffix}"
+            suffix += 1
+        return replace(template, template_id=uuid4().hex, display_name=display_name)
+
+    def _refresh_template_choices(self) -> None:
+        """Synchronize the template editor after local library changes."""
+        self._templates_by_id = {template.template_id: template for template in self._templates}
+        self._template_editor.set_templates(self._templates)
 
     def _delete_template(self, template_id: str) -> None:
         """Remove the selected YAML template from the local template library."""

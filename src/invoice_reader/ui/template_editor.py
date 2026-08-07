@@ -18,12 +18,16 @@ class TemplateEditor(ttk.LabelFrame):
         on_template_applied: Callable[[str], None],
         on_template_saved: Callable[[str | None, list[str], list[str]], None],
         on_template_deleted: Callable[[str], None],
+        on_templates_imported: Callable[[], None],
+        on_templates_exported: Callable[[], None],
     ) -> None:
         super().__init__(master, text="模板", padding=8)
         self._on_field_selected = on_field_selected
         self._on_template_applied = on_template_applied
         self._on_template_saved = on_template_saved
         self._on_template_deleted = on_template_deleted
+        self._on_templates_imported = on_templates_imported
+        self._on_templates_exported = on_templates_exported
         self._field = tk.StringVar(value=FIELD_LABELS[FIELD_NAMES[0]])
         self._existing_template = tk.StringVar()
         self._status = tk.StringVar(value="打开 PDF 后按 PLMN 自动匹配，或手动框选四个字段新建模板。")
@@ -101,6 +105,10 @@ class TemplateEditor(ttk.LabelFrame):
         self._optional_keywords.grid(row=2, column=4, columnspan=2, sticky="ew", padx=(6, 0), pady=(8, 0))
 
         ttk.Label(self, textvariable=self._status).grid(row=3, column=0, columnspan=6, sticky="w", pady=(8, 0))
+        exchange = ttk.Frame(self)
+        exchange.grid(row=4, column=0, columnspan=6, sticky="w", pady=(8, 0))
+        ttk.Button(exchange, text="导入模板", command=self._on_templates_imported).pack(side="left")
+        ttk.Button(exchange, text="导出模板", command=self._on_templates_exported).pack(side="left", padx=(6, 0))
 
     def _change_active_field(self, _event: tk.Event) -> None:
         selected_label = self._field.get()
