@@ -1,5 +1,6 @@
-"""Prompt for resolving a PDF filename that has no PLMN match."""
+"""Non-blocking prompt for resolving a PDF filename with no PLMN match."""
 
+from collections.abc import Callable
 import tkinter as tk
 from tkinter import ttk
 
@@ -8,9 +9,8 @@ class PlmnResolutionDialog:
     """Offer file renaming or a direct PLMN entry path."""
 
     @classmethod
-    def ask(cls, parent: tk.Misc) -> str | None:
-        """Return the selected resolution action, or None when cancelled."""
-        choice: str | None = None
+    def show(cls, parent: tk.Misc, on_selected: Callable[[str | None], None]) -> None:
+        """Show the modal choice and continue through a main-thread callback."""
         main_window = parent.winfo_toplevel()
         dialog = tk.Toplevel(main_window)
         dialog.title("无法解析 PLMN")
@@ -22,9 +22,12 @@ class PlmnResolutionDialog:
         ttk.Label(frame, text="无法从文件名解析 PLMN。请选择处理方式：").pack(anchor="w")
 
         def select(action: str) -> None:
-            nonlocal choice
-            choice = action
             dialog.destroy()
+            parent.after_idle(lambda: on_selected(action))
+
+        def cancel() -> None:
+            dialog.destroy()
+            parent.after_idle(lambda: on_selected(None))
 
         buttons = ttk.Frame(frame)
         buttons.pack(fill="x", pady=(14, 0))
@@ -39,8 +42,6 @@ class PlmnResolutionDialog:
         x = main_window.winfo_rootx() + (main_window.winfo_width() - dialog.winfo_width()) // 2
         y = main_window.winfo_rooty() + (main_window.winfo_height() - dialog.winfo_height()) // 2
         dialog.geometry(f"+{max(x, 0)}+{max(y, 0)}")
-        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
-        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
+        dialog.bind("<Escape>", lambda _event: cancel())
         dialog.grab_set()
-        main_window.wait_window(dialog)
-        return choice
