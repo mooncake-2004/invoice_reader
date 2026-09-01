@@ -4,25 +4,29 @@ from collections.abc import Callable
 import tkinter as tk
 from tkinter import ttk
 
-from invoice_reader.queue.queue_models import BatchQueue, QueueItem, QueueStatus, STATUS_LABELS
+from invoice_reader.i18n import t
+from invoice_reader.queue.queue_models import BatchQueue, QueueItem, QueueStatus
 
 
 FILTER_LABELS = {
-    "全部": None,
-    "待处理": QueueStatus.PENDING,
-    "无模板": QueueStatus.NO_TEMPLATE,
-    "提取失败": QueueStatus.EXTRACTION_FAILED,
-    "已完成": QueueStatus.COMPLETED,
-    "已跳过": QueueStatus.SKIPPED,
+    "filter.all": None,
+    "status.pending": QueueStatus.PENDING,
+    "status.no_template": QueueStatus.NO_TEMPLATE,
+    "status.extraction_failed": QueueStatus.EXTRACTION_FAILED,
+    "status.completed": QueueStatus.COMPLETED,
+    "status.skipped": QueueStatus.SKIPPED,
 }
 
 
 def queue_statistics(counts: dict[QueueStatus, int]) -> str:
     """Format queue totals without classifying missing templates as extraction failures."""
-    return (
-        f"总数 {sum(counts.values())} / 已完成 {counts[QueueStatus.COMPLETED]} / "
-        f"待处理 {counts[QueueStatus.PENDING]} / 无模板 {counts[QueueStatus.NO_TEMPLATE]} / "
-        f"提取失败 {counts[QueueStatus.EXTRACTION_FAILED]}"
+    return t(
+        "status.queue_statistics",
+        total=sum(counts.values()),
+        completed=counts[QueueStatus.COMPLETED],
+        pending=counts[QueueStatus.PENDING],
+        no_template=counts[QueueStatus.NO_TEMPLATE],
+        failed=counts[QueueStatus.EXTRACTION_FAILED],
     )
 
 
@@ -37,21 +41,23 @@ class BatchQueuePanel(ttk.LabelFrame):
         on_item_selected: Callable[[str], None],
         on_skip_current: Callable[[], None],
     ) -> None:
-        super().__init__(master, text="批量队列", padding=8)
+        super().__init__(master, text=t("panel.batch_queue"), padding=8)
         self._queue = BatchQueue()
         self._current_path = ""
+        self._scanning = False
         self._on_item_selected = on_item_selected
         self._filter_variables = {
-            label: tk.BooleanVar(value=True)
-            for label, status in FILTER_LABELS.items()
+            status: tk.BooleanVar(value=True)
+            for status in FILTER_LABELS.values()
             if status is not None
         }
-        self._statistics = tk.StringVar(value="总数 0 / 已完成 0 / 待处理 0 / 失败 0")
+        self._statistics = tk.StringVar(value=queue_statistics(self._queue.counts()))
         self._build(on_select_folder, on_rescan, on_skip_current)
 
     def set_queue(self, queue: BatchQueue) -> None:
         """Replace the displayed scan results in one Treeview refresh."""
         self._queue = queue
+        self._scanning = False
         self._refresh_tree()
 
     def update_item(self, item: QueueItem) -> None:
@@ -77,7 +83,8 @@ class BatchQueuePanel(ttk.LabelFrame):
 
     def set_scanning(self) -> None:
         """Show that directory enumeration is occurring in the background."""
-        self._statistics.set("正在扫描 PDF 文件夹…")
+        self._scanning = True
+        self._statistics.set(t("status.scanning"))
 
     def _build(
         self,
@@ -87,15 +94,20 @@ class BatchQueuePanel(ttk.LabelFrame):
     ) -> None:
         controls = ttk.Frame(self)
         controls.pack(fill="x")
-        ttk.Button(controls, text="选择批量处理文件夹", command=on_select_folder).pack(side="left")
-        ttk.Button(controls, text="重新扫描", command=on_rescan).pack(side="left", padx=(6, 0))
-        ttk.Button(controls, text="跳过当前", command=on_skip_current).pack(side="left", padx=(6, 0))
-        self._filter_button = ttk.Menubutton(controls, text="状态筛选")
+        self._select_folder_button = ttk.Button(controls, command=on_select_folder)
+        self._select_folder_button.pack(side="left")
+        self._rescan_button = ttk.Button(controls, command=on_rescan)
+        self._rescan_button.pack(side="left", padx=(6, 0))
+        self._skip_current_button = ttk.Button(controls, command=on_skip_current)
+        self._skip_current_button.pack(side="left", padx=(6, 0))
+        self._filter_button = ttk.Menubutton(controls)
         self._filter_menu = tk.Menu(self._filter_button, tearoff=False)
-        for label, variable in self._filter_variables.items():
+        for label_key, status in FILTER_LABELS.items():
+            if status is None:
+                continue
             self._filter_menu.add_checkbutton(
-                label=label,
-                variable=variable,
+                label=t(label_key),
+                variable=self._filter_variables[status],
                 command=self._refresh_tree,
             )
         self._filter_button.configure(menu=self._filter_menu)
@@ -104,8 +116,6 @@ class BatchQueuePanel(ttk.LabelFrame):
         tree_frame = ttk.Frame(self)
         tree_frame.pack(fill="both", expand=True)
         self._tree = ttk.Treeview(tree_frame, columns=("filename", "status"), show="headings", height=18)
-        self._tree.heading("filename", text="文件名")
-        self._tree.heading("status", text="状态")
         self._tree.column("filename", width=250, anchor="w")
         self._tree.column("status", width=80, anchor="center")
         self._tree.tag_configure("current", background="#d9eaff")
@@ -114,6 +124,30 @@ class BatchQueuePanel(ttk.LabelFrame):
         self._tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         self._tree.bind("<<TreeviewSelect>>", self._selected)
+        self.retranslate()
+
+    def retranslate(self) -> None:
+        """Refresh queue controls and dynamic status text in the current language."""
+        self.configure(text=t("panel.batch_queue"))
+        self._select_folder_button.configure(text=t("btn.select_batch_folder"))
+        self._rescan_button.configure(text=t("btn.rescan"))
+        self._skip_current_button.configure(text=t("btn.skip_current"))
+        self._filter_button.configure(text=t("btn.status_filter"))
+        menu_index = 0
+        for label_key, status in FILTER_LABELS.items():
+            if status is None:
+                continue
+            self._filter_menu.entryconfigure(menu_index, label=t(label_key))
+            menu_index += 1
+        self._tree.heading("filename", text=t("label.filename"))
+        self._tree.heading("status", text=t("label.status"))
+        for item in self._queue.items():
+            if self._tree.exists(item.file_path):
+                self._upsert_item(item)
+        if self._scanning:
+            self._statistics.set(t("status.scanning"))
+        else:
+            self._update_statistics()
 
     def _refresh_tree(self) -> None:
         self._tree.delete(*self._tree.get_children())
@@ -138,7 +172,7 @@ class BatchQueuePanel(ttk.LabelFrame):
             self._tree.delete(file_path)
 
     def _upsert_item(self, item: QueueItem) -> None:
-        values = (item.filename, STATUS_LABELS[item.status])
+        values = (item.filename, t(f"status.{item.status.value}"))
         if self._tree.exists(item.file_path):
             self._tree.item(item.file_path, values=values)
         else:
@@ -148,8 +182,8 @@ class BatchQueuePanel(ttk.LabelFrame):
         if all(variable.get() for variable in self._filter_variables.values()):
             return True
         return any(
-            variable.get() and FILTER_LABELS[label] == item.status
-            for label, variable in self._filter_variables.items()
+            variable.get() and status == item.status
+            for status, variable in self._filter_variables.items()
         )
 
     def _update_statistics(self) -> None:
