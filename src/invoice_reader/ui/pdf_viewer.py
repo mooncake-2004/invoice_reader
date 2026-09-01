@@ -8,6 +8,7 @@ from tkinter import filedialog, messagebox, ttk
 import fitz
 from PIL import ImageTk
 
+from invoice_reader.i18n import t
 from invoice_reader.services.pdf_service import PdfService
 from invoice_reader.templates.template_models import (
     FIELD_NAMES,
@@ -118,7 +119,7 @@ class PdfViewer(ttk.Frame):
         self._drawing_overlay = None
         self._selection_start = None
         self._selected_field = None
-        self._status.set("已关闭当前 PDF，请打开下一张。")
+        self._status.set(t("status.pdf_closed"))
 
     def apply_template_fields(self, fields: dict[str, TemplateField]) -> None:
         """Display all field locations from the selected local template."""
@@ -158,14 +159,13 @@ class PdfViewer(ttk.Frame):
         toolbar = ttk.Frame(self)
         toolbar.pack(fill="x", pady=(0, 8))
 
-        ttk.Button(toolbar, text="打开 PDF", command=self._open_pdf).pack(side="left")
+        self._open_button = ttk.Button(toolbar, command=self._open_pdf)
+        self._open_button.pack(side="left")
         ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=10)
-        ttk.Button(toolbar, text="缩小", command=lambda: self._change_zoom(-self._ZOOM_STEP)).pack(
-            side="left"
-        )
-        ttk.Button(toolbar, text="放大", command=lambda: self._change_zoom(self._ZOOM_STEP)).pack(
-            side="left", padx=(4, 0)
-        )
+        self._zoom_out_button = ttk.Button(toolbar, command=lambda: self._change_zoom(-self._ZOOM_STEP))
+        self._zoom_out_button.pack(side="left")
+        self._zoom_in_button = ttk.Button(toolbar, command=lambda: self._change_zoom(self._ZOOM_STEP))
+        self._zoom_in_button.pack(side="left", padx=(4, 0))
         ttk.Button(toolbar, text="100%", command=self._reset_zoom).pack(side="left", padx=(4, 0))
         ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=10)
         ttk.Button(toolbar, text="<", width=3, command=lambda: self._change_page(-1)).pack(side="left")
@@ -177,8 +177,26 @@ class PdfViewer(ttk.Frame):
         ttk.Label(toolbar, textvariable=self._page_total).pack(side="left")
         ttk.Button(toolbar, text=">", width=3, command=lambda: self._change_page(1)).pack(side="left", padx=(4, 0))
 
-        self._status = tk.StringVar(value="请打开一张 PDF")
+        self._status = tk.StringVar(value=t("status.open_pdf"))
         ttk.Label(toolbar, textvariable=self._status).pack(side="right")
+        self.retranslate()
+
+    def retranslate(self) -> None:
+        """Refresh toolbar labels and the current PDF status."""
+        self._open_button.configure(text=t("btn.open_pdf"))
+        self._zoom_out_button.configure(text=t("btn.zoom_out"))
+        self._zoom_in_button.configure(text=t("btn.zoom_in"))
+        if self._service.page_count:
+            self._status.set(
+                t(
+                    "status.pdf_page",
+                    current=self._page_index + 1,
+                    total=self._service.page_count,
+                    zoom=f"{self._zoom:.0%}",
+                )
+            )
+        else:
+            self._status.set(t("status.open_pdf"))
 
     def _build_canvas(self) -> None:
         container = ttk.Frame(self)
@@ -205,8 +223,8 @@ class PdfViewer(ttk.Frame):
 
     def _open_pdf(self) -> None:
         path = filedialog.askopenfilename(
-            title="选择 PDF",
-            filetypes=[("PDF 文件", "*.pdf")],
+            title=t("btn.select_pdf"),
+            filetypes=[(t("filetype.pdf"), "*.pdf")],
             parent=self.winfo_toplevel(),
         )
         if not path:
@@ -222,7 +240,7 @@ class PdfViewer(ttk.Frame):
         try:
             self._service.open(path)
         except (fitz.FileDataError, OSError, RuntimeError) as error:
-            messagebox.showerror("无法打开 PDF", str(error), parent=self.winfo_toplevel())
+            messagebox.showerror(t("dialog.open_pdf_failed"), str(error), parent=self.winfo_toplevel())
             return False
 
         self._page_index = 0
@@ -296,7 +314,12 @@ class PdfViewer(ttk.Frame):
         self._draw_current_page_fields()
         self._restore_page_number()
         self._status.set(
-            f"第 {self._page_index + 1} / {self._service.page_count} 页 | 缩放 {self._zoom:.0%}"
+            t(
+                "status.pdf_page",
+                current=self._page_index + 1,
+                total=self._service.page_count,
+                zoom=f"{self._zoom:.0%}",
+            )
         )
 
     def _restore_page_number(self) -> None:
