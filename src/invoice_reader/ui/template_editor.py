@@ -4,7 +4,8 @@ from collections.abc import Callable
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from invoice_reader.templates.template_models import FIELD_LABELS, FIELD_NAMES, InvoiceTemplate
+from invoice_reader.i18n import t
+from invoice_reader.templates.template_models import FIELD_NAMES, InvoiceTemplate
 
 
 class TemplateEditor(ttk.LabelFrame):
@@ -21,16 +22,18 @@ class TemplateEditor(ttk.LabelFrame):
         on_templates_imported: Callable[[], None],
         on_templates_exported: Callable[[], None],
     ) -> None:
-        super().__init__(master, text="模板", padding=8)
+        super().__init__(master, text=t("section.template"), padding=8)
         self._on_field_selected = on_field_selected
         self._on_template_applied = on_template_applied
         self._on_template_saved = on_template_saved
         self._on_template_deleted = on_template_deleted
         self._on_templates_imported = on_templates_imported
         self._on_templates_exported = on_templates_exported
-        self._field = tk.StringVar(value=FIELD_LABELS[FIELD_NAMES[0]])
+        self._field_labels = {t(f"field.{field_name}"): field_name for field_name in FIELD_NAMES}
+        self._field = tk.StringVar(value=t(f"field.{FIELD_NAMES[0]}"))
         self._existing_template = tk.StringVar()
-        self._status = tk.StringVar(value="打开 PDF 后按 PLMN 自动匹配，或手动框选四个字段新建模板。")
+        self._status = tk.StringVar(value=t("status.template_initial"))
+        self._status_key: str | None = "status.template_initial"
         self._template_labels: dict[str, str] = {}
         self._editing_template_id: str | None = None
 
@@ -60,59 +63,101 @@ class TemplateEditor(ttk.LabelFrame):
 
     def set_status(self, message: str) -> None:
         """Show template matching or save feedback."""
+        self._status_key = None
         self._status.set(message)
 
     def _build(self) -> None:
         for column in (1, 3, 5):
             self.columnconfigure(column, weight=1)
 
-        ttk.Label(self, text="框选字段").grid(row=0, column=0, sticky="w")
-        field_combo = ttk.Combobox(
+        self._field_label = ttk.Label(self, text=t("label.select_field"))
+        self._field_label.grid(row=0, column=0, sticky="w")
+        self._field_combo = ttk.Combobox(
             self,
             textvariable=self._field,
-            values=[FIELD_LABELS[field_name] for field_name in FIELD_NAMES],
+            values=list(self._field_labels),
             state="readonly",
             width=16,
         )
-        field_combo.grid(row=0, column=1, sticky="ew", padx=(6, 12))
-        field_combo.bind("<<ComboboxSelected>>", self._change_active_field)
+        self._field_combo.grid(row=0, column=1, sticky="ew", padx=(6, 12))
+        self._field_combo.bind("<<ComboboxSelected>>", self._change_active_field)
 
-        ttk.Label(self, text="已有模板").grid(row=0, column=2, sticky="w")
+        self._existing_template_label = ttk.Label(self, text=t("label.existing_template"))
+        self._existing_template_label.grid(row=0, column=2, sticky="w")
         self._existing_template_combo = ttk.Combobox(
             self,
             textvariable=self._existing_template,
             state="readonly",
         )
         self._existing_template_combo.grid(row=0, column=3, sticky="ew", padx=(6, 4))
-        ttk.Button(self, text="应用模板", command=self._apply_template).grid(row=0, column=4, sticky="w")
-        ttk.Button(self, text="删除模板", command=self._delete_template).grid(row=0, column=5, sticky="w", padx=(4, 0))
+        self._apply_button = ttk.Button(self, text=t("btn.apply_template"), command=self._apply_template)
+        self._apply_button.grid(row=0, column=4, sticky="w")
+        self._delete_button = ttk.Button(self, text=t("btn.delete_template"), command=self._delete_template)
+        self._delete_button.grid(row=0, column=5, sticky="w", padx=(4, 0))
 
-        ttk.Label(self, text="模板名和公司名会自动使用当前 PLMN。").grid(
+        self._plmn_note_label = ttk.Label(self, text=t("label.template_plmn_note"))
+        self._plmn_note_label.grid(
             row=1, column=0, columnspan=3, sticky="w", pady=(8, 0)
         )
-        ttk.Button(self, text="保存新模板", command=self._save_new_template).grid(
+        self._save_new_button = ttk.Button(
+            self, text=t("btn.save_new_template"), command=self._save_new_template
+        )
+        self._save_new_button.grid(
             row=1, column=4, sticky="w", pady=(8, 0)
         )
-        ttk.Button(self, text="保存修改", command=self._save_template_changes).grid(
+        self._save_changes_button = ttk.Button(
+            self, text=t("btn.save_template_changes"), command=self._save_template_changes
+        )
+        self._save_changes_button.grid(
             row=1, column=5, sticky="w", padx=(4, 0), pady=(8, 0)
         )
 
-        ttk.Label(self, text="必需关键词备注（每行一条）").grid(row=2, column=0, sticky="nw", pady=(8, 0))
+        self._required_keywords_label = ttk.Label(self, text=t("label.required_keywords"))
+        self._required_keywords_label.grid(row=2, column=0, sticky="nw", pady=(8, 0))
         self._required_keywords = tk.Text(self, height=3, width=28)
         self._required_keywords.grid(row=2, column=1, columnspan=2, sticky="ew", padx=(6, 12), pady=(8, 0))
-        ttk.Label(self, text="可选关键词备注（每行一条）").grid(row=2, column=3, sticky="nw", pady=(8, 0))
+        self._optional_keywords_label = ttk.Label(self, text=t("label.optional_keywords"))
+        self._optional_keywords_label.grid(row=2, column=3, sticky="nw", pady=(8, 0))
         self._optional_keywords = tk.Text(self, height=3, width=28)
         self._optional_keywords.grid(row=2, column=4, columnspan=2, sticky="ew", padx=(6, 0), pady=(8, 0))
 
         ttk.Label(self, textvariable=self._status).grid(row=3, column=0, columnspan=6, sticky="w", pady=(8, 0))
         exchange = ttk.Frame(self)
         exchange.grid(row=4, column=0, columnspan=6, sticky="w", pady=(8, 0))
-        ttk.Button(exchange, text="导入模板", command=self._on_templates_imported).pack(side="left")
-        ttk.Button(exchange, text="导出模板", command=self._on_templates_exported).pack(side="left", padx=(6, 0))
+        self._import_button = ttk.Button(
+            exchange, text=t("btn.import_templates"), command=self._on_templates_imported
+        )
+        self._import_button.pack(side="left")
+        self._export_button = ttk.Button(
+            exchange, text=t("btn.export_templates"), command=self._on_templates_exported
+        )
+        self._export_button.pack(side="left", padx=(6, 0))
+        self.retranslate()
+
+    def retranslate(self) -> None:
+        """Refresh template controls and field names in the current language."""
+        if self.cget("text"):
+            self.configure(text=t("section.template"))
+        selected_field = self._field_labels.get(self._field.get(), FIELD_NAMES[0])
+        self._field_labels = {t(f"field.{field_name}"): field_name for field_name in FIELD_NAMES}
+        self._field_combo.configure(values=list(self._field_labels))
+        self._field.set(t(f"field.{selected_field}"))
+        self._field_label.configure(text=t("label.select_field"))
+        self._existing_template_label.configure(text=t("label.existing_template"))
+        self._apply_button.configure(text=t("btn.apply_template"))
+        self._delete_button.configure(text=t("btn.delete_template"))
+        self._plmn_note_label.configure(text=t("label.template_plmn_note"))
+        self._save_new_button.configure(text=t("btn.save_new_template"))
+        self._save_changes_button.configure(text=t("btn.save_template_changes"))
+        self._required_keywords_label.configure(text=t("label.required_keywords"))
+        self._optional_keywords_label.configure(text=t("label.optional_keywords"))
+        self._import_button.configure(text=t("btn.import_templates"))
+        self._export_button.configure(text=t("btn.export_templates"))
+        if self._status_key is not None:
+            self._status.set(t(self._status_key))
 
     def _change_active_field(self, _event: tk.Event) -> None:
-        selected_label = self._field.get()
-        field_name = next(name for name, label in FIELD_LABELS.items() if label == selected_label)
+        field_name = self._field_labels[self._field.get()]
         self._on_field_selected(field_name)
 
     def _apply_template(self) -> None:
@@ -125,17 +170,19 @@ class TemplateEditor(ttk.LabelFrame):
 
     def _save_template_changes(self) -> None:
         if self._editing_template_id is None:
-            self.set_status("请先应用一个已有模板，再保存修改。")
+            self._status_key = "status.apply_template_first_save"
+            self._status.set(t(self._status_key))
             return
         self._on_template_saved(self._editing_template_id, *self._keyword_notes())
 
     def _delete_template(self) -> None:
         if self._editing_template_id is None:
-            self.set_status("请先应用一个已有模板，再删除。")
+            self._status_key = "status.apply_template_first_delete"
+            self._status.set(t(self._status_key))
             return
         if messagebox.askyesno(
-            "删除模板",
-            "确定删除当前本机模板吗？",
+            t("dialog.delete_template"),
+            t("dialog.delete_template_message"),
             parent=self.winfo_toplevel(),
         ):
             self._on_template_deleted(self._editing_template_id)
