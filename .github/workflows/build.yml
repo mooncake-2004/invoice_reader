@@ -22,15 +22,26 @@ jobs:
           python -m pip install pyinstaller
 
       - name: Build EXE
-        shell: cmd
+        shell: powershell
         run: |
-          pyinstaller --onefile --windowed --name InvoiceReader ^
-            --collect-all pdfminer ^
-            --collect-all invoice2data ^
-            --hidden-import invoice2data.extract ^
-            --hidden-import invoice2data.extract.invoice_template ^
-            --hidden-import invoice2data.input ^
-            --hidden-import invoice2data.output ^
+          # Find all mypyc compiled .pyd files in site-packages root
+          $siteDir = python -c "import site; print(site.getsitepackages()[0])"
+          $mypycFiles = Get-ChildItem -Path $siteDir -Filter "*__mypyc*.pyd" -File
+          $addBinArgs = @()
+          foreach ($f in $mypycFiles) {
+            Write-Host "Found mypyc module: $($f.Name)"
+            $addBinArgs += "--add-binary"
+            $addBinArgs += "$($f.FullName);."
+          }
+
+          pyinstaller --onefile --windowed --name InvoiceReader `
+            --collect-all pdfminer `
+            --collect-all invoice2data `
+            --hidden-import invoice2data.extract `
+            --hidden-import invoice2data.extract.invoice_template `
+            --hidden-import invoice2data.input `
+            --hidden-import invoice2data.output `
+            @addBinArgs `
             src/invoice_reader/__main__.py
 
       - name: Upload EXE
