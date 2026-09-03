@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from invoice_reader.i18n import t
+
 
 class QueueStatus(StrEnum):
     """The processing state displayed for each queued PDF."""
@@ -17,12 +19,12 @@ class QueueStatus(StrEnum):
 
 
 STATUS_LABELS = {
-    QueueStatus.PENDING: "待处理",
-    QueueStatus.PROCESSING: "处理中",
-    QueueStatus.COMPLETED: "已完成",
-    QueueStatus.NO_TEMPLATE: "无模板",
-    QueueStatus.EXTRACTION_FAILED: "提取失败",
-    QueueStatus.SKIPPED: "已跳过",
+    QueueStatus.PENDING: t("status.pending"),
+    QueueStatus.PROCESSING: t("status.processing"),
+    QueueStatus.COMPLETED: t("status.completed"),
+    QueueStatus.NO_TEMPLATE: t("status.no_template"),
+    QueueStatus.EXTRACTION_FAILED: t("status.extraction_failed"),
+    QueueStatus.SKIPPED: t("status.skipped"),
 }
 
 
