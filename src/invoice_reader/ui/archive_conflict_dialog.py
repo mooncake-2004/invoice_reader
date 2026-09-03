@@ -3,6 +3,8 @@
 import tkinter as tk
 from tkinter import ttk
 
+from invoice_reader.i18n import t
+
 
 class ArchiveConflictDialog:
     """Prompt for overwrite, rename, or cancellation with explicit labels."""
@@ -13,12 +15,12 @@ class ArchiveConflictDialog:
         choice: str | None = None
         main_window = parent.winfo_toplevel()
         dialog = tk.Toplevel(main_window)
-        dialog.title("归档目录已有同名文件")
+        dialog.title(t("dialog.archive_conflict"))
         dialog.transient(main_window)
         dialog.resizable(False, False)
         frame = ttk.Frame(dialog, padding=16)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text=f"归档目录已存在同名文件：{filename}").pack(anchor="w")
+        ttk.Label(frame, text=t("dialog.archive_conflict_message", filename=filename)).pack(anchor="w")
 
         def select(action: str | None) -> None:
             nonlocal choice
@@ -27,9 +29,9 @@ class ArchiveConflictDialog:
 
         buttons = ttk.Frame(frame)
         buttons.pack(fill="x", pady=(14, 0))
-        ttk.Button(buttons, text="覆盖", command=lambda: select("overwrite")).pack(side="left")
-        ttk.Button(buttons, text="重命名", command=lambda: select("rename")).pack(side="left", padx=(8, 0))
-        ttk.Button(buttons, text="取消", command=lambda: select(None)).pack(side="left", padx=(8, 0))
+        ttk.Button(buttons, text=t("btn.overwrite"), command=lambda: select("overwrite")).pack(side="left")
+        ttk.Button(buttons, text=t("btn.rename"), command=lambda: select("rename")).pack(side="left", padx=(8, 0))
+        ttk.Button(buttons, text=t("btn.cancel"), command=lambda: select(None)).pack(side="left", padx=(8, 0))
         dialog.protocol("WM_DELETE_WINDOW", lambda: select(None))
         dialog.bind("<Escape>", lambda _event: select(None))
         cls._center(dialog, main_window)
