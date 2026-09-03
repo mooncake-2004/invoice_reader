@@ -42,6 +42,16 @@ class SettingsRepository:
         settings["archive_directory"] = archive_directory
         self._save(settings)
 
+    def load_language(self) -> str:
+        """Load the saved UI language, defaulting to Chinese."""
+        return str(self._load().get("language", "zh"))
+
+    def save_language(self, language: str) -> None:
+        """Save the UI language without changing other settings."""
+        settings = self._load()
+        settings["language"] = language
+        self._save(settings)
+
     def _load(self) -> dict[str, object]:
         if not self._path.exists():
             return {}

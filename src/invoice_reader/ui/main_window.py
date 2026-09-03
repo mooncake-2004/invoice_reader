@@ -15,6 +15,7 @@ from invoice_reader.excel.excel_errors import DuplicatePlmnError, ExcelHeaderErr
 from invoice_reader.excel.excel_service import ExcelService
 from invoice_reader.extraction.invoice2data_adapter import Invoice2DataAdapter
 from invoice_reader.infrastructure.defaults import template_defaults
+from invoice_reader.i18n import get_language, set_language, t
 from invoice_reader.repositories.approval_repository import ApprovalRepository
 from invoice_reader.repositories.settings_repository import SettingsRepository
 from invoice_reader.queue.queue_models import BatchQueue, QueueItem, QueueStatus
@@ -47,6 +48,9 @@ class MainWindow(ttk.Frame):
 
         defaults = template_defaults()
         self._settings_repository = SettingsRepository()
+        load_language = getattr(self._settings_repository, "load_language", None)
+        saved_language = load_language() if load_language is not None else get_language()
+        set_language(saved_language if saved_language in ("zh", "en") else "zh")
         self._approval_repository = ApprovalRepository()
         self._excel_service = ExcelService()
         self._archive_service = ArchiveService()
@@ -68,13 +72,25 @@ class MainWindow(ttk.Frame):
         self._template_io = TemplateIo()
         self._templates = self._template_repository.load_all()
         self._templates_by_id = {template.template_id: template for template in self._templates}
+        language_bar = ttk.Frame(self)
+        language_bar.pack(fill="x", pady=(0, 6))
+        self._language_var = tk.StringVar()
+        self._language_combo = ttk.Combobox(
+            language_bar,
+            textvariable=self._language_var,
+            state="readonly",
+            width=10,
+        )
+        self._language_combo.pack(side="right")
+        self._language_combo.bind("<<ComboboxSelected>>", self._change_language)
+
         self._template_compiler = TemplateCompiler(defaults.page_size_tolerance)
         self._invoice2data_adapter = Invoice2DataAdapter(self._template_compiler)
         self._template_matcher = TemplateMatcher()
 
         settings = ttk.Frame(self)
         settings.pack(fill="x", pady=(0, 10))
-        self._plmn_section = CollapsiblePanel(settings, "PLMN 文件名解析", "PLMN: 未解析")
+        self._plmn_section = CollapsiblePanel(settings, t("section.plmn_parser"), t("status.plmn_unparsed"))
         self._plmn_section.pack(fill="x")
         self._filename_parser_panel = FilenameParserPanel(self._plmn_section.content, self._settings_repository)
         self._filename_parser_panel.configure(text="")
@@ -89,7 +105,7 @@ class MainWindow(ttk.Frame):
         )
         self._excel_panel.configure(text="")
         self._excel_panel.pack(fill="x")
-        self._archive_section = CollapsiblePanel(settings, "归档", self._archive_summary())
+        self._archive_section = CollapsiblePanel(settings, t("section.archive"), self._archive_summary())
         self._archive_section.pack(fill="x")
         self._archive_panel = ArchivePanel(
             self._archive_section.content,
@@ -98,7 +114,7 @@ class MainWindow(ttk.Frame):
         )
         self._archive_panel.configure(text="")
         self._archive_panel.pack(fill="x")
-        self._template_section = CollapsiblePanel(settings, "模板", "无模板")
+        self._template_section = CollapsiblePanel(settings, t("section.template"), t("status.no_template"))
         self._template_section.pack(fill="x")
         self._template_editor = TemplateEditor(
             self._template_section.content,
@@ -145,15 +161,65 @@ class MainWindow(ttk.Frame):
             on_retry_archive=self._retry_archive,
         )
         self._approval_panel.pack(fill="both", expand=True)
+        self.retranslate()
+
+    def _change_language(self, _event: tk.Event) -> None:
+        """Apply and persist the language selected in the top bar."""
+        language = "zh" if self._language_combo.current() == 0 else "en"
+        set_language(language)
+        save_language = getattr(self._settings_repository, "save_language", None)
+        if save_language is not None:
+            save_language(language)
+        self.retranslate()
+
+    def retranslate(self) -> None:
+        """Refresh this window and each already-created child panel."""
+        self._language_combo.configure(values=(t("language.chinese"), t("language.english")))
+        self._language_combo.current(0 if get_language() == "zh" else 1)
+
+        section_titles = (
+            (self._plmn_section, t("section.plmn_parser")),
+            (self._excel_section, t("section.excel")),
+            (self._archive_section, t("section.archive")),
+            (self._template_section, t("section.template")),
+        )
+        for section, title in section_titles:
+            section._header.winfo_children()[1].configure(text=title)
+
+        self._plmn_section.set_summary(
+            t("status.plmn_value", plmn=self._current_plmn)
+            if self._current_plmn
+            else t("status.plmn_unparsed")
+        )
+        self._excel_section.set_summary(self._excel_summary())
+        self._archive_section.set_summary(self._archive_summary())
+        self._template_section.set_summary(
+            self._current_template.display_name
+            if self._current_template is not None
+            else t("status.no_template")
+        )
+
+        for panel in (
+            self._filename_parser_panel,
+            self._excel_panel,
+            self._archive_panel,
+            self._template_editor,
+            self._queue_panel,
+            self._viewer,
+            self._approval_panel,
+        ):
+            panel_retranslate = getattr(panel, "retranslate", None)
+            if panel_retranslate is not None:
+                panel_retranslate()
 
     def _excel_summary(self) -> str:
-        return Path(self._excel_path).name if self._excel_path else "未选择 Excel"
+        return Path(self._excel_path).name if self._excel_path else t("status.no_excel")
 
     def _archive_summary(self) -> str:
-        return Path(self._archive_directory).name if self._archive_directory else "未设置目录"
+        return Path(self._archive_directory).name if self._archive_directory else t("status.no_archive_directory")
 
     def _select_batch_directory(self) -> None:
-        directory = filedialog.askdirectory(title="选择批量处理文件夹", parent=self.winfo_toplevel())
+        directory = filedialog.askdirectory(title=t("dialog.select_batch_folder"), parent=self.winfo_toplevel())
         if directory:
             self._start_batch_scan(directory)
 
@@ -186,7 +252,7 @@ class MainWindow(ttk.Frame):
             self.after(0, lambda: self._poll_scan_result(generation))
             return
         if error is not None:
-            messagebox.showerror("无法扫描文件夹", str(error), parent=self.winfo_toplevel())
+            messagebox.showerror(t("dialog.scan_failed"), str(error), parent=self.winfo_toplevel())
             return
         self._finish_batch_scan(directory, paths or [])
 
@@ -206,7 +272,11 @@ class MainWindow(ttk.Frame):
             return
         open_path = self._queue_item_open_path(item)
         if not open_path:
-            messagebox.showwarning("文件未找到", "原路径和归档路径中均未找到该 PDF。", parent=self.winfo_toplevel())
+            messagebox.showwarning(
+                t("dialog.file_not_found"),
+                t("dialog.file_not_found_message"),
+                parent=self.winfo_toplevel(),
+            )
             return
         self._load_queue_item(item, item.status != QueueStatus.COMPLETED, open_path)
 
@@ -362,9 +432,9 @@ class MainWindow(ttk.Frame):
         """Stop the queue on this PDF and show the main-thread PLMN dialog."""
         if not self._is_current_session(session_id):
             return
-        self._template_section.set_summary("无模板")
+        self._template_section.set_summary(t("status.no_template"))
         self._set_queue_status(self._queue_status_path(), QueueStatus.NO_TEMPLATE)
-        self._template_editor.set_status("文件名未解析出 PLMN：请处理当前发票后再继续。")
+        self._template_editor.set_status(t("status.plmn_resolution_required"))
         PlmnResolutionDialog.show(
             self,
             lambda action: self._handle_unparsed_plmn_action(service, parser, session_id, action),
@@ -382,8 +452,8 @@ class MainWindow(ttk.Frame):
             return
         if action == "manual":
             plmn = simpledialog.askstring(
-                "手动输入 PLMN",
-                "请输入 PLMN：",
+                t("dialog.manual_plmn"),
+                t("dialog.enter_plmn"),
                 parent=self.winfo_toplevel(),
             )
             if plmn and plmn.strip():
@@ -401,22 +471,26 @@ class MainWindow(ttk.Frame):
         if not self._is_current_session(session_id):
             return
         filename = simpledialog.askstring(
-            "重命名 PDF 文件",
-            "请输入新的文件名：",
+            t("dialog.rename_pdf"),
+            t("dialog.enter_new_filename"),
             initialvalue=service.path.name,
             parent=self.winfo_toplevel(),
         )
         if filename is None:
             return
         if not filename.strip():
-            messagebox.showwarning("文件名不能为空", "请输入新的 PDF 文件名。", parent=self.winfo_toplevel())
+            messagebox.showwarning(
+                t("dialog.empty_filename"),
+                t("dialog.empty_filename_message"),
+                parent=self.winfo_toplevel(),
+            )
             self._pause_for_unparsed_plmn(service, parser, session_id)
             return
         old_disk_path = str(service.path)
         try:
             service.rename_current(filename.strip())
         except OSError as error:
-            messagebox.showerror("无法重命名文件", str(error), parent=self.winfo_toplevel())
+            messagebox.showerror(t("dialog.rename_failed"), str(error), parent=self.winfo_toplevel())
             self._pause_for_unparsed_plmn(service, parser, session_id)
             return
         self._update_queue_after_rename(old_disk_path, str(service.path))
@@ -425,7 +499,11 @@ class MainWindow(ttk.Frame):
         if plmn:
             self._continue_with_plmn(service, plmn, session_id)
             return
-        messagebox.showwarning("仍无法解析 PLMN", "重命名后仍无法从文件名解析 PLMN。", parent=self.winfo_toplevel())
+        messagebox.showwarning(
+            t("dialog.plmn_still_unresolved"),
+            t("dialog.plmn_still_unresolved_message"),
+            parent=self.winfo_toplevel(),
+        )
         self._pause_for_unparsed_plmn(service, parser, session_id)
 
     def _continue_with_plmn(self, service: PdfService, plmn: str, session_id: int) -> None:
@@ -441,24 +519,22 @@ class MainWindow(ttk.Frame):
         """Match and extract after the current PDF has a usable PLMN."""
         if not self._is_current_session(session_id):
             return
-        self._plmn_section.set_summary(f"PLMN: {self._current_plmn}")
+        self._plmn_section.set_summary(t("status.plmn_value", plmn=self._current_plmn))
         template = self._template_matcher.match(self._templates, self._current_plmn)
         if template is None:
-            self._template_section.set_summary("无模板")
+            self._template_section.set_summary(t("status.no_template"))
             self._set_queue_status(self._queue_status_path(), QueueStatus.NO_TEMPLATE)
             self._record = self._empty_current_record(InvoiceStatus.NEEDS_TEMPLATE)
             self._show_record(self._record)
             self._refresh_template_save_action()
-            self._template_editor.set_status(
-                f"PLMN {self._current_plmn} 没有本机模板：请框选四个字段后新建。"
-            )
+            self._template_editor.set_status(t("status.no_template_for_plmn", plmn=self._current_plmn))
             return
         if not self._apply_template(template.template_id):
             return
         if self._template_matcher.page_size_differs(template, service.page_size(0)):
-            self._template_editor.set_status("版式可能变了，请核对字段位置。")
+            self._template_editor.set_status(t("status.layout_changed"))
         else:
-            self._template_editor.set_status(f"已按 PLMN {self._current_plmn} 自动套用模板。")
+            self._template_editor.set_status(t("status.template_auto_applied", plmn=self._current_plmn))
 
     def _apply_template(self, template_id: str) -> bool:
         """Draw the template locations and extract its structured field values."""
@@ -471,9 +547,9 @@ class MainWindow(ttk.Frame):
             return False
         if self._template_fields_are_empty(template):
             self._set_queue_status(self._queue_status_path(), QueueStatus.EXTRACTION_FAILED)
-            self._template_editor.set_status("提取失败：模板字段均为空。")
+            self._template_editor.set_status(t("status.template_fields_empty"))
             return False
-        self._template_editor.set_status(f"已应用模板：{template.display_name}")
+        self._template_editor.set_status(t("status.template_applied", name=template.display_name))
         return True
 
     def _extract_template_record(self, template: InvoiceTemplate) -> bool:
@@ -489,7 +565,7 @@ class MainWindow(ttk.Frame):
             self._show_record(self._record)
             self._refresh_template_save_action()
             self._set_queue_status(self._queue_status_path(), QueueStatus.EXTRACTION_FAILED)
-            self._template_editor.set_status(f"提取失败：{error}；可重新框选字段。")
+            self._template_editor.set_status(t("status.extraction_failed_reselect", error=error))
             return False
         self._show_record(self._record)
         self._refresh_template_save_action()
@@ -507,14 +583,14 @@ class MainWindow(ttk.Frame):
             return
         if not self._extract_template_record(self._current_template):
             return
-        self._template_editor.set_status("已重新提取，请审批字段。")
+        self._template_editor.set_status(t("status.reextracted"))
 
     def _start_field_reselection(self, field_name: str) -> None:
         """Make the next PDF box replace one field on this invoice only."""
         if self._record is None:
             return
         self._viewer.start_field_reselection(field_name, self._current_session_id)
-        self._template_editor.set_status(f"请在 PDF 上重新框选 {field_name}。")
+        self._template_editor.set_status(t("status.reselect_field", field=field_name))
 
     def _field_reselected(self, session_id: int, field_name: str, field: TemplateField) -> None:
         """Extract a one-off current-invoice field from a newly drawn box."""
@@ -534,7 +610,7 @@ class MainWindow(ttk.Frame):
         self._show_record(self._record)
         self._refresh_template_save_action()
         self._viewer.highlight_field(field_name)
-        self._template_editor.set_status(f"{field_name} 已按当前发票的新框重新提取。")
+        self._template_editor.set_status(t("status.field_reextracted", field=field_name))
 
     def _approve_record(self, record: InvoiceRecord) -> None:
         """Start the write-then-archive sequence after human approval."""
@@ -543,8 +619,8 @@ class MainWindow(ttk.Frame):
         self._approval_panel.set_recovery_actions(False, False)
         if not self._excel_path:
             messagebox.showwarning(
-                "请先选择 Excel",
-                "当前发票已审批。请先新建或选择 Excel 文件后再写入。",
+                t("dialog.select_excel_first"),
+                t("dialog.select_excel_first_message"),
                 parent=self.winfo_toplevel(),
             )
             self._approval_panel.set_recovery_actions(True, False)
@@ -565,7 +641,7 @@ class MainWindow(ttk.Frame):
         except DuplicatePlmnError as error:
             self._confirm_overwrite(record, approved_at, error.existing_values)
         except ExcelLockedError:
-            self._excel_write_failed(record, approved_at, "Excel 文件被占用，请关闭后重试。")
+            self._excel_write_failed(record, approved_at, t("dialog.excel_locked_message"))
         except (OSError, ValueError) as error:
             self._excel_write_failed(record, approved_at, str(error))
         else:
@@ -577,11 +653,18 @@ class MainWindow(ttk.Frame):
         approved_at: str,
         values: tuple[str, ...],
     ) -> None:
-        labels = ("PLMN", "Invoice No.", "SDR amount", "TAP start", "TAP end", "审批时间")
+        labels = (
+            t("field.plmn"),
+            t("field.invoice_no"),
+            t("field.sdr_amount"),
+            t("field.tap_start"),
+            t("field.tap_end"),
+            t("field.approved_at"),
+        )
         existing = "\n".join(f"{label}: {value}" for label, value in zip(labels, values))
         if messagebox.askyesno(
-            "PLMN 已有记录",
-            f"该 PLMN 已有记录：\n{existing}\n\n是否覆盖？",
+            t("dialog.duplicate_plmn"),
+            t("dialog.duplicate_plmn_message", existing=existing),
             parent=self.winfo_toplevel(),
         ):
             self._write_approved_record(record, approved_at, overwrite=True)
@@ -589,8 +672,8 @@ class MainWindow(ttk.Frame):
     def _excel_write_failed(self, record: InvoiceRecord, approved_at: str, reason: str) -> None:
         self._approval_repository.save(record, approved_at, "", False)
         self._approval_panel.set_recovery_actions(True, False)
-        self._template_editor.set_status("Excel 写入失败，请关闭文件后重试。")
-        messagebox.showerror("Excel 写入失败", reason, parent=self.winfo_toplevel())
+        self._template_editor.set_status(t("status.excel_write_failed"))
+        messagebox.showerror(t("dialog.excel_write_failed"), reason, parent=self.winfo_toplevel())
 
     def _after_excel_written(self, record: InvoiceRecord, approved_at: str) -> None:
         record.status = InvoiceStatus.EXCEL_WRITTEN
@@ -598,8 +681,12 @@ class MainWindow(ttk.Frame):
         self._refresh_queue_for_excel()
         self._approval_panel.set_recovery_actions(False, False)
         if not self._archive_directory:
-            self._template_editor.set_status("已写入 Excel；未设置归档目录。")
-            messagebox.showinfo("已写入 Excel", "已写入 Excel。未设置归档目录，PDF 未移动。", parent=self.winfo_toplevel())
+            self._template_editor.set_status(t("status.excel_written_no_archive"))
+            messagebox.showinfo(
+                t("dialog.excel_written"),
+                t("dialog.excel_written_no_archive"),
+                parent=self.winfo_toplevel(),
+            )
             return
         self._archive_pdf(record, approved_at)
 
@@ -624,13 +711,18 @@ class MainWindow(ttk.Frame):
         if action == "overwrite":
             self._archive_with_options(record, approved_at, None, True)
         elif action == "rename":
-            renamed = simpledialog.askstring("重命名归档文件", "请输入新文件名：", initialvalue=filename, parent=self.winfo_toplevel())
+            renamed = simpledialog.askstring(
+                t("dialog.rename_archive_file"),
+                t("dialog.enter_new_filename"),
+                initialvalue=filename,
+                parent=self.winfo_toplevel(),
+            )
             if renamed:
                 self._archive_with_options(record, approved_at, renamed.strip(), False)
             else:
-                self._archive_failed(record, approved_at, "用户取消归档。")
+                self._archive_failed(record, approved_at, t("dialog.archive_cancelled"))
         else:
-            self._archive_failed(record, approved_at, "用户取消归档。")
+            self._archive_failed(record, approved_at, t("dialog.archive_cancelled"))
 
     def _archive_with_options(
         self,
@@ -650,8 +742,12 @@ class MainWindow(ttk.Frame):
         record.status = InvoiceStatus.ARCHIVED
         self._approval_repository.save(record, approved_at, self._excel_path, True, archive_path, True)
         self._approval_panel.set_recovery_actions(False, False)
-        self._template_editor.set_status(f"已归档到 {archive_path}")
-        messagebox.showinfo("已归档", f"已归档到 {archive_path}", parent=self.winfo_toplevel())
+        self._template_editor.set_status(t("status.archived_to", path=archive_path))
+        messagebox.showinfo(
+            t("dialog.archived"),
+            t("dialog.archived_message", path=archive_path),
+            parent=self.winfo_toplevel(),
+        )
         if self._batch_queue.get(self._current_queue_path) is not None:
             updated_item = self._batch_queue.set_archive_path(self._current_queue_path, archive_path)
             self._queue_repository.save(self._batch_queue)
@@ -661,8 +757,12 @@ class MainWindow(ttk.Frame):
     def _archive_failed(self, record: InvoiceRecord, approved_at: str, reason: str) -> None:
         self._approval_repository.save(record, approved_at, self._excel_path, True, "", False)
         self._approval_panel.set_recovery_actions(False, True)
-        self._template_editor.set_status("PDF 归档失败，请手动移动或重试归档。")
-        messagebox.showwarning("PDF 归档失败", f"PDF 归档失败：{reason}", parent=self.winfo_toplevel())
+        self._template_editor.set_status(t("status.archive_failed"))
+        messagebox.showwarning(
+            t("dialog.archive_failed"),
+            t("dialog.archive_failed_message", reason=reason),
+            parent=self.winfo_toplevel(),
+        )
 
     def _retry_archive(self) -> None:
         if self._record is not None and self._archive_directory:
@@ -670,10 +770,10 @@ class MainWindow(ttk.Frame):
 
     def _create_monthly_excel(self) -> None:
         excel_path = filedialog.asksaveasfilename(
-            title="新建月度 Excel",
+            title=t("dialog.create_excel"),
             initialfile=f"{datetime.now():%Y-%m}.xlsx",
             defaultextension=".xlsx",
-            filetypes=[("Excel 文件", "*.xlsx")],
+            filetypes=[(t("filetype.excel"), "*.xlsx")],
             parent=self.winfo_toplevel(),
         )
         if not excel_path:
@@ -681,14 +781,18 @@ class MainWindow(ttk.Frame):
         try:
             self._excel_service.create_monthly_workbook(excel_path)
         except ExcelLockedError:
-            messagebox.showerror("Excel 文件被占用", "Excel 文件被占用，请关闭后重试。", parent=self.winfo_toplevel())
+            messagebox.showerror(
+                t("dialog.excel_locked"),
+                t("dialog.excel_locked_message"),
+                parent=self.winfo_toplevel(),
+            )
             return
         self._set_excel_path(excel_path)
 
     def _select_excel(self) -> None:
         excel_path = filedialog.askopenfilename(
-            title="选择已有 Excel",
-            filetypes=[("Excel 文件", "*.xlsx")],
+            title=t("dialog.select_excel"),
+            filetypes=[(t("filetype.excel"), "*.xlsx")],
             parent=self.winfo_toplevel(),
         )
         if not excel_path:
@@ -696,7 +800,7 @@ class MainWindow(ttk.Frame):
         try:
             self._excel_service.validate_workbook(excel_path)
         except (ExcelHeaderError, OSError, ValueError) as error:
-            messagebox.showerror("Excel 文件不匹配", str(error), parent=self.winfo_toplevel())
+            messagebox.showerror(t("dialog.excel_mismatch"), str(error), parent=self.winfo_toplevel())
             return
         self._set_excel_path(excel_path)
 
@@ -713,7 +817,7 @@ class MainWindow(ttk.Frame):
 
     def _select_archive_directory(self) -> None:
         archive_directory = filedialog.askdirectory(
-            title="设置归档目录",
+            title=t("dialog.select_archive_directory"),
             parent=self.winfo_toplevel(),
         )
         if archive_directory:
@@ -730,7 +834,11 @@ class MainWindow(ttk.Frame):
             self._excel_path,
             self._current_plmn,
         ) is not None:
-            messagebox.showinfo("已审批过", "这张 PDF 已审批过。", parent=self.winfo_toplevel())
+            messagebox.showinfo(
+                t("dialog.already_approved"),
+                t("dialog.already_approved_message"),
+                parent=self.winfo_toplevel(),
+            )
 
     def _empty_current_record(self, status: InvoiceStatus) -> InvoiceRecord:
         plmn_field = ExtractedField(
@@ -771,27 +879,27 @@ class MainWindow(ttk.Frame):
         """Save the current four boxes to the template keyed by the current PLMN."""
         if not self._current_plmn:
             plmn = simpledialog.askstring(
-                "手动填写 PLMN",
-                "文件名未解析出 PLMN，请手动填写：",
+                t("dialog.manual_plmn_for_template"),
+                t("dialog.manual_plmn_for_template_message"),
                 parent=self.winfo_toplevel(),
             )
             if plmn is None:
-                self._template_editor.set_status("已取消保存模板。")
+                self._template_editor.set_status(t("status.template_save_cancelled"))
                 return
             self._current_plmn = plmn.strip()
             if not self._current_plmn:
-                self._template_editor.set_status("PLMN 不能为空，未保存模板。")
+                self._template_editor.set_status(t("status.plmn_empty"))
                 return
         existing_template = self._template_repository.find_by_plmn(self._current_plmn)
         selected_template = self._templates_by_id.get(template_id) if template_id is not None else None
         if existing_template is None and selected_template is not None and not selected_template.plmn:
             existing_template = selected_template
         if existing_template is not None and not messagebox.askyesno(
-            "覆盖模板",
-            f"PLMN {self._current_plmn} 已有模板，是否更新覆盖？",
+            t("dialog.overwrite_template"),
+            t("dialog.overwrite_template_message", plmn=self._current_plmn),
                 parent=self.winfo_toplevel(),
         ):
-            self._template_editor.set_status("已取消覆盖已有 PLMN 模板。")
+            self._template_editor.set_status(t("status.template_overwrite_cancelled"))
             return
         try:
             template = self._template_compiler.compile(
@@ -820,17 +928,21 @@ class MainWindow(ttk.Frame):
         self._template_editor.set_templates(self._templates)
         self._apply_template(template.template_id)
         self._refresh_template_save_action()
-        self._template_editor.set_status(f"已保存模板，关联 PLMN: {template.plmn}")
+        self._template_editor.set_status(t("status.template_saved", plmn=template.plmn))
 
     def _export_templates(self) -> None:
         """Export selected local templates as one portable JSON file."""
         if not self._templates:
-            messagebox.showinfo("没有模板", "当前没有可导出的模板。", parent=self.winfo_toplevel())
+            messagebox.showinfo(
+                t("dialog.no_templates"),
+                t("dialog.no_templates_message"),
+                parent=self.winfo_toplevel(),
+            )
             return
         export_path = filedialog.asksaveasfilename(
-            title="导出模板",
+            title=t("dialog.export_templates"),
             defaultextension=".json",
-            filetypes=[("JSON 文件", "*.json")],
+            filetypes=[(t("filetype.json"), "*.json")],
             parent=self.winfo_toplevel(),
         )
         if not export_path:
@@ -838,15 +950,19 @@ class MainWindow(ttk.Frame):
         try:
             self._template_io.export_templates(export_path, self._templates)
         except OSError as error:
-            messagebox.showerror("导出失败", str(error), parent=self.winfo_toplevel())
+            messagebox.showerror(t("dialog.export_failed"), str(error), parent=self.winfo_toplevel())
             return
-        messagebox.showinfo("已导出模板", f"已导出 {len(self._templates)} 个模板。", parent=self.winfo_toplevel())
+        messagebox.showinfo(
+            t("dialog.templates_exported"),
+            t("dialog.templates_exported_message", count=len(self._templates)),
+            parent=self.winfo_toplevel(),
+        )
 
     def _import_templates(self) -> None:
         """Select and import valid portable templates into the local library."""
         import_path = filedialog.askopenfilename(
-            title="导入模板",
-            filetypes=[("JSON 文件", "*.json")],
+            title=t("dialog.import_templates"),
+            filetypes=[(t("filetype.json"), "*.json")],
             parent=self.winfo_toplevel(),
         )
         if not import_path:
@@ -854,18 +970,22 @@ class MainWindow(ttk.Frame):
         try:
             available_templates = self._template_io.import_templates(import_path)
         except (TemplateFileError, OSError) as error:
-            messagebox.showerror("导入失败", str(error), parent=self.winfo_toplevel())
+            messagebox.showerror(t("dialog.import_failed"), str(error), parent=self.winfo_toplevel())
             return
         imported_count = self._import_all_templates(available_templates)
         self._refresh_template_choices()
-        messagebox.showinfo("已导入模板", f"已导入 {imported_count} 个模板。", parent=self.winfo_toplevel())
+        messagebox.showinfo(
+            t("dialog.templates_imported"),
+            t("dialog.templates_imported_message", count=imported_count),
+            parent=self.winfo_toplevel(),
+        )
 
     def _import_all_templates(self, templates: list[InvoiceTemplate]) -> int:
         """Import every template using one all-or-nothing conflict choice."""
         has_conflicts = any(self._template_conflicts(template) for template in templates)
         overwrite = not has_conflicts or messagebox.askyesno(
-            "模板冲突",
-            "发现同名或同 PLMN 的本机模板。\n\n选择“是”全部覆盖，选择“否”全部跳过冲突模板。",
+            t("dialog.template_conflict"),
+            t("dialog.template_conflict_message"),
             parent=self.winfo_toplevel(),
         )
         imported_count = 0
@@ -909,6 +1029,6 @@ class MainWindow(ttk.Frame):
         self._templates = [current for current in self._templates if current.template_id != template_id]
         self._template_editor.set_templates(self._templates)
         self._template_editor.clear_template()
-        self._template_section.set_summary("无模板")
-        self._template_editor.set_status(f"已删除本机模板：{template.display_name}")
+        self._template_section.set_summary(t("status.no_template"))
+        self._template_editor.set_status(t("status.template_deleted", name=template.display_name))
 
